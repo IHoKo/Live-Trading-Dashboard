@@ -16,6 +16,8 @@ const RECONNECT_CAP_MS = 30_000
 type SocketApi = {
   subscribe: (symbols: string[]) => void
   unsubscribe: (symbols: string[]) => void
+  /** Fetch now. Outside market hours this is the only thing that moves prices. */
+  refresh: (symbols?: string[]) => void
 }
 
 const PriceSocketContext = createContext<SocketApi | null>(null)
@@ -51,6 +53,13 @@ export function PriceSocketProvider({ children }: { children: ReactNode }) {
       const removed = symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)
       removed.forEach((s) => wantedRef.current.delete(s))
       if (removed.length) send({ type: 'unsubscribe', symbols: removed })
+    },
+    [send],
+  )
+
+  const refresh = useCallback(
+    (symbols?: string[]) => {
+      send({ type: 'refresh', ...(symbols?.length ? { symbols } : {}) })
     },
     [send],
   )
@@ -110,7 +119,7 @@ export function PriceSocketProvider({ children }: { children: ReactNode }) {
   }, [applyTick, setStatus, setConnection])
 
   return (
-    <PriceSocketContext.Provider value={{ subscribe, unsubscribe }}>
+    <PriceSocketContext.Provider value={{ subscribe, unsubscribe, refresh }}>
       {children}
     </PriceSocketContext.Provider>
   )

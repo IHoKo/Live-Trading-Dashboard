@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { useSymbols } from '../hooks/usePriceSocket'
+import { usePriceSocket, useSymbols } from '../hooks/usePriceSocket'
 import { freshness, selectTick, usePriceStore } from '../store/prices'
 
 /**
@@ -49,13 +49,79 @@ export function TickerTape({ symbols = DEFAULT_WATCHLIST }: { symbols?: string[]
             : 'connecting'
         }
       >
-        {connection === 'open' ? 'TAPE' : connection === 'connecting' ? 'TAPE ·' : 'TAPE ✕'}
+        {connection !== 'open'
+          ? connection === 'connecting'
+            ? 'TAPE ·'
+            : 'TAPE ✕'
+          : status?.state === 'live'
+            ? 'TAPE ● LIVE'
+            : status?.market_open === false
+              ? 'TAPE ○ CLOSED'
+              : 'TAPE'}
       </div>
 
       {symbols.map((symbol) => (
         <TapeCell key={symbol} symbol={symbol} />
       ))}
+
+      <RefreshButton symbols={symbols} />
     </div>
+  )
+}
+
+/**
+ * The manual fetch. Background polling only runs during market hours, so when
+ * the market is closed this button is the only thing that moves prices — hence
+ * it lives permanently on the tape rather than hiding in a menu.
+ */
+function RefreshButton({ symbols }: { symbols: string[] }) {
+  const { refresh } = usePriceSocket()
+  const status = usePriceStore((s) => s.status)
+  const [pending, setPending] = useState(false)
+  const lastRefresh = status?.last_refresh_at ?? null
+
+  // Clear the pending state when a fresh result comes back, or after a timeout
+  // so a dropped socket can't leave the button stuck.
+  useEffect(() => {
+    if (!pending) return
+    const timer = window.setTimeout(() => setPending(false), 8000)
+    return () => window.clearTimeout(timer)
+  }, [pending, lastRefresh])
+
+  useEffect(() => {
+    setPending(false)
+  }, [lastRefresh])
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setPending(true)
+        refresh(symbols)
+      }}
+      disabled={pending}
+      title={
+        lastRefresh
+          ? `Last fetched ${new Date(lastRefresh * 1000).toLocaleTimeString()}`
+          : 'Fetch current prices'
+      }
+      style={{
+        marginLeft: 'auto',
+        alignSelf: 'stretch',
+        padding: '0 var(--space-3)',
+        border: 'none',
+        borderLeft: '1px solid var(--rule)',
+        background: 'transparent',
+        color: pending ? 'var(--muted)' : 'var(--brass)',
+        font: 'inherit',
+        fontSize: '0.7rem',
+        letterSpacing: '0.12em',
+        cursor: pending ? 'default' : 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {pending ? 'FETCHING…' : 'REFRESH'}
+    </button>
   )
 }
 

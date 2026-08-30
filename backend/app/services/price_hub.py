@@ -48,9 +48,13 @@ MAX_UPSTREAM_CALLS_PER_MIN = 50
 
 class FeedState(str, Enum):
     NOT_STARTED = "not_started"
-    LIVE = "live"  # rung 1
-    POLLING = "polling"  # rung 2
-    DOWN = "down"  # rung 3
+    LIVE = "live"  # rung 1: upstream socket
+    POLLING = "polling"  # rung 2: REST fallback during the session
+    DOWN = "down"  # rung 3: provider failing, serving stale
+    # Market closed, deliberately fetching nothing until asked. Prices are not
+    # moving, so polling would burn quota re-reading the same closing numbers.
+    # A deviation from the §6 state set; recorded in CLAUDE.md.
+    IDLE = "idle"
 
 
 @dataclass
@@ -103,6 +107,8 @@ class PriceHub:
         self._subscribers: dict[int, _Subscriber] = {}
         self._last_call_at = 0.0
 
+        self.last_refresh_at: float | None = None
+        self._refreshing = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
         # One event per waiting loop. A single shared Event would be wrong:
         # each waiter clears it, so whichever wakes first can swallow the
@@ -116,7 +122,7 @@ class PriceHub:
         if self._running:
             return
         self._running = True
-        self.state = FeedState.POLLING
+        self.state = self._nominal_state()
         self._tasks = [
             asyncio.create_task(self._flush_loop(), name="hub-flush"),
             asyncio.create_task(self._upstream_loop(), name="hub-upstream"),
@@ -207,6 +213,23 @@ class PriceHub:
         )
         self._dirty.add(symbol)
 
+    async def refresh(self, symbols: Iterable[str] | None = None) -> list[str]:
+        """Fetch these symbols right now, regardless of feed state.
+
+        The manual path: the page-load fetch and the Refresh button. Background
+        polling only runs during market hours (see `_poll_loop`), so outside the
+        session this is the *only* thing that moves prices.
+        """
+        targets = sorted(symbols) if symbols is not None else sorted(self.tracked_symbols())
+        if not targets:
+            return []
+        if self._refreshing.locked():
+            return []  # a refresh is already in flight; don't queue up duplicates
+        async with self._refreshing:
+            await self._poll_once(targets)
+        self.last_refresh_at = self._clock()
+        return targets
+
     # --- rung 1: upstream socket -------------------------------------------
 
     async def _upstream_loop(self) -> None:
@@ -258,8 +281,13 @@ class PriceHub:
             symbols = sorted(self.tracked_symbols())
             open_now = is_market_open()
 
-            if symbols and not (self.upstream_connected and open_now):
+            # Rung 2 covers a broken socket *during* the session. With the market
+            # closed, the last price is the closing price and re-reading it every
+            # minute buys nothing — so fetch only when asked (see `refresh`).
+            if symbols and open_now and not self.upstream_connected:
                 await self._poll_once(symbols)
+            else:
+                self._recompute_state()
 
             await self._wait_for_change(changed, self._poll_open if open_now else self._poll_closed)
 
@@ -371,7 +399,9 @@ class PriceHub:
     # --- state --------------------------------------------------------------
 
     def _nominal_state(self) -> FeedState:
-        return FeedState.LIVE if self.upstream_connected else FeedState.POLLING
+        if self.upstream_connected:
+            return FeedState.LIVE
+        return FeedState.POLLING if is_market_open() else FeedState.IDLE
 
     def _recompute_state(self) -> None:
         if self.state is FeedState.DOWN and not self.upstream_connected:
@@ -384,6 +414,7 @@ class PriceHub:
             "provider": self._provider.name,
             "state": self.state.value,
             "market_open": is_market_open(),
+            "last_refresh_at": self.last_refresh_at,
         }
 
     async def broadcast_status(self) -> None:

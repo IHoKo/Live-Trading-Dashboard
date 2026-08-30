@@ -4,6 +4,7 @@ Message shapes are exactly §6:
 
     client -> {"type": "subscribe",   "symbols": ["AAPL", "NVDA"]}
               {"type": "unsubscribe", "symbols": ["NVDA"]}
+              {"type": "refresh"}   -- fetch now; the manual path
     server -> {"type": "tick",   "s": "AAPL", "p": 213.44, "t": 1754800000000, "dp": 0.83}
               {"type": "status", "provider": "finnhub", "state": "live"}
 
@@ -13,6 +14,7 @@ the connection: handshake, subscription bookkeeping, and the keepalive.
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -56,7 +58,9 @@ async def prices(socket: WebSocket) -> None:
     await socket.accept()
     sink = _WebSocketSink(socket)
     sub_id = hub.add_sink(sink)
+    tasks: set[asyncio.Task] = set()
     ping_task = asyncio.create_task(_keepalive(sink))
+    tasks.add(ping_task)
 
     try:
         await sink.send_json(hub.status_payload())
@@ -68,6 +72,12 @@ async def prices(socket: WebSocket) -> None:
             if kind == "subscribe":
                 symbols = _clean(message.get("symbols"))
                 current = hub.subscribe(sub_id, symbols)
+                # Page-load fetch: anything we have no price for at all. Runs in
+                # the background so a slow upstream can't stall this socket, and
+                # the flush loop delivers the results as they land.
+                unknown = [s for s in symbols if not hub.snapshot([s])]
+                if unknown:
+                    _spawn(hub.refresh(unknown), tasks)
                 # Send what we already know immediately, so a new tab paints
                 # prices instead of empty rows while it waits for a print.
                 for tick in hub.snapshot(sorted(current)):
@@ -88,6 +98,11 @@ async def prices(socket: WebSocket) -> None:
             elif kind == "unsubscribe":
                 hub.unsubscribe(sub_id, _clean(message.get("symbols")))
 
+            elif kind == "refresh":
+                # The manual path. With the market closed this is the only thing
+                # that moves prices; during the session it just jumps the queue.
+                _spawn(hub.refresh(_clean(message.get("symbols")) or None), tasks)
+
             elif kind == "pong":
                 continue
 
@@ -96,8 +111,17 @@ async def prices(socket: WebSocket) -> None:
     except Exception:
         logger.exception("price socket failed")
     finally:
-        ping_task.cancel()
+        for task in tasks:
+            task.cancel()
         hub.remove_sink(sub_id)
+
+
+def _spawn(coro: Coroutine, tasks: set[asyncio.Task]) -> None:
+    """Fire-and-forget, but keep a reference so it isn't garbage collected
+    mid-flight and so the socket's teardown can cancel it."""
+    task = asyncio.create_task(coro)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 def _clean(raw: object) -> list[str]:

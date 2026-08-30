@@ -35,9 +35,11 @@ class TTLCache:
     def __init__(self, ttl: float, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._ttl = ttl
         self._clock = clock
-        # Entries are evicted lazily on read. The key space is bounded by the
-        # watchlist and the fixed set of chart ranges, so it cannot grow without
-        # bound and needs no reaper.
+        # Entries are evicted lazily, when an expired key is read again. That
+        # is only safe because every key here is *stable* — symbol for quotes,
+        # (symbol, resolution, window length) for candles — so a key is always
+        # revisited and cleaned. Put anything clock-derived in a cache key and
+        # this dict grows for the life of the process; see CachingProvider.candles.
         self._entries: dict[Any, tuple[float, Any]] = {}
         self._locks: dict[Any, asyncio.Lock] = {}
 
@@ -92,7 +94,15 @@ class CachingProvider(MarketDataProvider):
         return await self._quotes.get_or_set(symbol, lambda: self._inner.quote(symbol))
 
     async def candles(self, symbol: str, resolution: Resolution, frm: int, to: int) -> list[Candle]:
-        key = (symbol, resolution, frm, to)
+        # Keyed on the window's LENGTH, never its absolute position. An
+        # absolute (frm, to) moves with the clock, so every request minted a
+        # key nothing would ever read again — entries that the TTL expired but
+        # nothing ever evicted, growing for as long as the process ran.
+        #
+        # Length still separates the ranges that share a resolution: 6M and 1Y
+        # are both "D" bars, so a (symbol, resolution) key would collide and
+        # serve six months of data to a one-year chart.
+        key = (symbol, resolution, to - frm)
         return await self._candles.get_or_set(
             key, lambda: self._inner.candles(symbol, resolution, frm, to)
         )

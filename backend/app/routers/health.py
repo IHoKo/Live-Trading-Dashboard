@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api", tags=["health"])
 class Health(BaseModel):
     status: Literal["ok"] = "ok"
     provider: str
-    feed: Literal["not_started", "live", "polling", "down"] = "not_started"
+    feed: Literal["not_started", "live", "polling", "down", "idle"] = "not_started"
     ws_connected: bool = False
     market_open: bool | None = None
     subscribed_symbols: int = 0

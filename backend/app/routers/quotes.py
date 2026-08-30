@@ -45,9 +45,10 @@ _RANGE_SPEC: dict[ChartRange, tuple[Resolution, int]] = {
     "5Y": ("W", 60 * 60 * 24 * 1827),
 }
 
-# Candle windows are snapped to a 60s boundary so the cache key repeats within
-# the 60s candle TTL. Without this the `to` timestamp changes every request and
-# the cache never hits.
+# Candle windows snap to a 60s boundary so repeated requests in the same minute
+# describe the same window. The cache no longer depends on this — it keys on
+# window length — but deterministic bounds keep chart data stable while a user
+# clicks between ranges.
 _WINDOW_BUCKET_SECONDS = 60
 
 

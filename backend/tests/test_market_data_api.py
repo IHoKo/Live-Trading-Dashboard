@@ -138,7 +138,7 @@ async def test_caching_provider_collapses_repeat_reads() -> None:
 
     await cached.candles("AAPL", "D", 0, 100)
     await cached.candles("AAPL", "D", 0, 100)
-    await cached.candles("AAPL", "D", 0, 200)  # different window, different key
+    await cached.candles("AAPL", "D", 0, 200)  # different LENGTH, different key
     assert len(inner.candle_calls) == 2
 
 
@@ -155,9 +155,9 @@ async def test_search_is_not_cached() -> None:
 # --- window bucketing -------------------------------------------------------
 
 
-def test_candle_window_snaps_to_a_60s_boundary_so_the_cache_can_hit() -> None:
-    """An unbucketed `to` timestamp changes every request, so the 60s candle
-    cache would never produce a hit."""
+def test_candle_window_snaps_to_a_60s_boundary() -> None:
+    """Deterministic window bounds within a minute, so chart data stays stable
+    while a user clicks between ranges."""
     res_a, frm_a, to_a = candle_window("1D", now=1_754_800_031)
     res_b, frm_b, to_b = candle_window("1D", now=1_754_800_059)
 
@@ -297,3 +297,55 @@ def test_market_endpoints_503_when_no_key_is_configured() -> None:
         res = unconfigured.get("/api/quotes", params={"symbols": "AAPL"})
         assert res.status_code == 503
         assert "FINNHUB_API_KEY" in res.json()["detail"]
+
+
+# --- cache key stability: the fix for the unbounded-growth bug ---------------
+
+
+async def test_a_window_that_slides_with_the_clock_still_hits_the_cache() -> None:
+    """The bug: keying on absolute (frm, to) minted a fresh key every minute,
+    and nothing ever read those keys again, so nothing ever evicted them."""
+    inner = FakeProvider()
+    cached = CachingProvider(inner, candle_ttl=60.0)
+
+    # Same 1-day window, sampled a minute apart.
+    await cached.candles("AAPL", "5", 1_000_000, 1_086_400)
+    await cached.candles("AAPL", "5", 1_000_060, 1_086_460)
+    await cached.candles("AAPL", "5", 1_000_120, 1_086_520)
+
+    assert len(inner.candle_calls) == 1, "a sliding window of equal length is one key"
+
+
+async def test_ranges_that_share_a_resolution_do_not_collide() -> None:
+    """6M and 1Y are both daily bars — a (symbol, resolution) key would serve
+    six months of data to a one-year chart."""
+    inner = FakeProvider()
+    cached = CachingProvider(inner, candle_ttl=60.0)
+
+    _, frm_6m, to_6m = candle_window("6M", now=1_754_800_000)
+    _, frm_1y, to_1y = candle_window("1Y", now=1_754_800_000)
+
+    await cached.candles("AAPL", "D", frm_6m, to_6m)
+    await cached.candles("AAPL", "D", frm_1y, to_1y)
+
+    assert len(inner.candle_calls) == 2, "different lookbacks must be different keys"
+
+
+async def test_candle_cache_size_is_bounded_by_symbols_times_ranges() -> None:
+    """Simulate a day of chart loads; the cache must not grow with uptime."""
+    inner = FakeProvider()
+    cached = CachingProvider(inner, candle_ttl=1e9)  # never expire, so growth is visible
+    symbols = ["AAPL", "MSFT", "NVDA"]
+    ranges = ["1D", "5D", "1M", "6M", "1Y", "5Y"]
+
+    for minute in range(24 * 60):
+        now = 1_754_800_000 + minute * 60
+        for symbol in symbols:
+            for rng in ranges:
+                resolution, frm, to = candle_window(rng, now=now)
+                await cached.candles(symbol, resolution, frm, to)
+
+    entries = len(cached._candles._entries)
+    locks = len(cached._candles._locks)
+    assert entries <= len(symbols) * len(ranges), f"{entries} entries after 24h of requests"
+    assert locks <= len(symbols) * len(ranges), f"{locks} locks after 24h of requests"

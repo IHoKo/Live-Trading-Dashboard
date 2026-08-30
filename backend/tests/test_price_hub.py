@@ -346,3 +346,93 @@ async def test_a_thousand_upstream_prints_do_not_become_a_thousand_messages() ->
     received = len(sink.ticks("AAPL"))
     assert received < 50, f"1000 prints produced {received} messages — coalescing is not working"
     assert sink.ticks("AAPL")[-1]["p"] == pytest.approx(209.99), "last message is the latest price"
+
+
+# --- manual refresh mode ----------------------------------------------------
+# "Live when the market is open, manual when it's closed." Background polling is
+# a fallback for a broken socket during the session, not an always-on fetcher.
+
+
+async def test_no_background_polling_while_the_market_is_closed(monkeypatch) -> None:
+    import app.services.price_hub as mod
+
+    monkeypatch.setattr(mod, "is_market_open", lambda *a: False)
+    provider = FakeProvider()
+    hub = make_hub(provider, max_calls_per_min=0, poll_interval_closed=0.01)
+    hub.subscribe(hub.add_sink(RecordingSink()), ["AAPL"])
+
+    task = asyncio.create_task(hub._poll_loop())
+    await asyncio.sleep(0.06)  # several poll cycles would have elapsed
+    hub._running = False
+    task.cancel()
+
+    assert provider.quote_calls == [], "closed market must not fetch on a timer"
+    assert hub.state is FeedState.IDLE
+
+
+async def test_polling_still_covers_a_broken_socket_during_the_session(monkeypatch) -> None:
+    import app.services.price_hub as mod
+
+    monkeypatch.setattr(mod, "is_market_open", lambda *a: True)
+    provider = FakeProvider()
+    hub = make_hub(provider, max_calls_per_min=0, poll_interval_open=0.01)
+    hub.subscribe(hub.add_sink(RecordingSink()), ["AAPL"])
+    hub.upstream_connected = False
+
+    task = asyncio.create_task(hub._poll_loop())
+    await asyncio.sleep(0.05)
+    hub._running = False
+    task.cancel()
+
+    assert provider.quote_calls, "rung 2 must still cover a dead socket mid-session"
+
+
+async def test_refresh_fetches_on_demand_even_when_closed(monkeypatch) -> None:
+    import app.services.price_hub as mod
+
+    monkeypatch.setattr(mod, "is_market_open", lambda *a: False)
+    provider = FakeProvider()
+    hub = make_hub(provider, max_calls_per_min=0, clock=lambda: 4242.0)
+    sink = RecordingSink()
+    hub.subscribe(hub.add_sink(sink), ["AAPL"])
+
+    refreshed = await hub.refresh()
+    await hub.flush()
+
+    assert refreshed == ["AAPL"]
+    assert provider.quote_calls == ["AAPL"]
+    assert sink.ticks("AAPL")[0]["p"] == 100.0
+    assert hub.last_refresh_at == 4242.0
+
+
+async def test_concurrent_refreshes_collapse_to_one(monkeypatch) -> None:
+    """Button spam must not multiply upstream calls."""
+    import app.services.price_hub as mod
+
+    monkeypatch.setattr(mod, "is_market_open", lambda *a: False)
+    provider = FakeProvider()
+
+    # Real upstream calls suspend on I/O. Without a yield here the first refresh
+    # runs start to finish before the second even begins, and the concurrency
+    # this test exists to check never happens.
+    plain_quote = provider.quote
+
+    async def slow_quote(symbol: str) -> Any:
+        await asyncio.sleep(0.01)
+        return await plain_quote(symbol)
+
+    provider.quote = slow_quote  # type: ignore[method-assign]
+
+    hub = make_hub(provider, max_calls_per_min=0)
+    hub.subscribe(hub.add_sink(RecordingSink()), ["AAPL", "NVDA"])
+
+    await asyncio.gather(*(hub.refresh() for _ in range(5)))
+
+    assert provider.quote_calls == ["AAPL", "NVDA"], "five clicks, one fetch"
+
+
+async def test_refresh_with_no_symbols_is_a_no_op() -> None:
+    provider = FakeProvider()
+    hub = make_hub(provider, max_calls_per_min=0)
+    assert await hub.refresh() == []
+    assert provider.quote_calls == []

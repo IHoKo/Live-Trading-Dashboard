@@ -215,6 +215,25 @@ cycle take longer than its nominal interval when the watchlist is large. The §4
 interval is a target, not a guarantee. Polling also backs off to 60s when the market
 is closed, because closing prices do not move.
 
+## Fetch policy: live when open, manual when closed
+
+Decided 2026-08-30, a deliberate narrowing of §4's fallback ladder. Do not "restore"
+continuous polling as if it were a regression.
+
+- **Market open** — the upstream trade socket streams normally (rung 1), and REST
+  polling still covers a *broken socket during the session* (rung 2). Unchanged.
+- **Market closed** — no background fetching at all. Feed state is `idle`, a fifth
+  state beyond §6's `live | polling | down`. The last price is the closing price;
+  re-reading it on a timer spends quota to learn nothing.
+- **On demand** — `PriceHub.refresh()`, reached by `{"type": "refresh"}` on the price
+  socket and by the REFRESH button on the tape. Also runs once per page load for
+  symbols with no cached price, so a fresh tab paints numbers instead of dashes.
+- Concurrent refreshes collapse to one upstream fetch, so button spam costs nothing.
+
+Markets are closed roughly 75% of the week, and this is a single-user app on a
+60 calls/min free tier. The old behaviour spent ~9,000 calls/day re-reading static
+closing prices; it now spends a handful per page load and per click.
+
 ## Other standing details worth not rediscovering
 
 - **Coalesce ticks**: buffer per symbol, flush at most every 250 ms. A liquid symbol prints

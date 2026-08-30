@@ -9,12 +9,14 @@ export type Tick = {
   stale_since: number | null
 }
 
-export type FeedState = 'not_started' | 'live' | 'polling' | 'down'
+export type FeedState = 'not_started' | 'live' | 'polling' | 'down' | 'idle'
 
 export type Status = {
   provider: string
   state: FeedState
   market_open: boolean
+  /** Unix seconds of the last manual/on-demand fetch, or null. */
+  last_refresh_at: number | null
 }
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
