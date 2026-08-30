@@ -1,0 +1,67 @@
+/* Design tokens — plan.md §8.2.
+ *
+ * Seeded in Phase 0 so nothing hardcodes hex later. The full design pass
+ * (split-flap tape, row tint wash, webfonts, reduced-motion handling) is
+ * Phase 6; this file is the palette and type scale it will build on.
+ *
+ * Gain/loss are deliberately desaturated: a portfolio full of saturated red is
+ * a stress machine, and muted tones let the magnitude of the number talk.
+ */
+
+:root {
+  /* Dark is the default. */
+  --ink: #0e1116; /* background */
+  --paper: #f5f2ec; /* foreground */
+  --slate: #1a2028; /* row bands, panels */
+  --gain: #2f7d6e;
+  --loss: #a8442f;
+  --brass: #c9a227; /* accent — tape and active states only */
+
+  --muted: color-mix(in srgb, var(--paper) 55%, var(--ink));
+  --rule: color-mix(in srgb, var(--paper) 14%, var(--ink));
+
+  --font-display: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --step-0: 0.875rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+  --step-3: 2.5rem;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-5: 2.5rem;
+
+  color-scheme: dark;
+}
+
+/* Light variant inverts ink/paper and drops the brass a shade for contrast. */
+:root[data-theme='light'] {
+  --ink: #f5f2ec;
+  --paper: #0e1116;
+  --slate: #e6e1d6;
+  --brass: #9a7c1d;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every number in a column gets this, or a live table jitters horribly. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
