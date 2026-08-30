@@ -14,7 +14,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.routers import health
+from app.providers.cache import CachingProvider
+from app.providers.finnhub import FinnhubProvider
+from app.routers import health, quotes
 
 logger = logging.getLogger("ticker")
 
@@ -43,9 +45,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             INDEX_HTML,
             STATIC_DIR,
         )
+
+    # One provider, one HTTP client, shared by every request — so the connection
+    # pool and the response cache are shared too. A per-request client would
+    # defeat both and burn the free tier's 60 calls/minute.
+    if settings.finnhub_api_key:
+        app.state.provider = CachingProvider(FinnhubProvider(settings.finnhub_api_key))
+    else:
+        app.state.provider = None
+        logger.warning(
+            "FINNHUB_API_KEY is unset — market data endpoints will return 503. "
+            "The app still boots and /api/health still passes."
+        )
+
     yield
-    # Phase 2 closes the upstream feed and the browser sockets here. fly.toml
-    # allows 30s for it (kill_signal = SIGTERM, kill_timeout = 30).
+
+    # Phase 2 also closes the upstream feed and the browser sockets here.
+    # fly.toml allows 30s for it (kill_signal = SIGTERM, kill_timeout = 30s).
+    provider = getattr(app.state, "provider", None)
+    if provider is not None:
+        await provider.aclose()
 
 
 app = FastAPI(
@@ -64,6 +83,7 @@ app.include_router(health.router)
 #     api = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 # Quotes, portfolio, transactions, watchlist and chat routers hang off this.
 api = APIRouter(prefix="/api")
+api.include_router(quotes.router)
 app.include_router(api)
 
 # --- 3. Built frontend assets ----------------------------------------------

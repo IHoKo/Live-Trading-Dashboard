@@ -11,6 +11,13 @@ looks nothing like the cause — while the app itself is running fine
 (plan.md §9.2, §9.4).
 """
 
+from typing import TYPE_CHECKING
+
+from fastapi import HTTPException, Request
+
+if TYPE_CHECKING:
+    from app.providers.base import MarketDataProvider
+
 
 async def require_session() -> None:
     """Placeholder for the Phase 6 session-cookie check.
@@ -19,3 +26,20 @@ async def require_session() -> None:
     router in `main.py` — never on the health router.
     """
     raise NotImplementedError("Auth lands in Phase 6 (plan.md §10).")
+
+
+def get_provider(request: Request) -> "MarketDataProvider":
+    """The shared market data provider, built once in the lifespan hook.
+
+    Absent only when FINNHUB_API_KEY is unset. That is a 503 on the market data
+    endpoints, never a crash at import or boot: the app must still start and
+    still answer /api/health, or a missing secret takes the machine down instead
+    of degrading one feature (plan.md §9.3).
+    """
+    provider = getattr(request.app.state, "provider", None)
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Market data is unavailable: FINNHUB_API_KEY is not configured.",
+        )
+    return provider
