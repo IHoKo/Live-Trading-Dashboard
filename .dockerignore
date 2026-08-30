@@ -1,0 +1,37 @@
+# Keep the build context small — flyctl uploads it on every deploy.
+# NOTE: backend/uv.lock is deliberately NOT ignored. The image builds with
+# `uv sync --frozen`, which fails hard without it. That is the desired behavior.
+
+node_modules
+**/node_modules
+frontend/dist
+
+.git
+.gitignore
+
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+
+# Platform-specific; the image builds its own venv.
+.venv
+**/.venv
+
+.env
+.env.*
+!.env.example
+
+*.db
+*.db-wal
+*.db-shm
+
+.DS_Store
+**/.DS_Store
+
+CLAUDE.md
+plan.md
+prompts.md
+README.md

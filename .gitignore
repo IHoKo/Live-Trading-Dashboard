@@ -1,0 +1,26 @@
+# Lockfiles are committed on purpose: backend/uv.lock and frontend/package-lock.json.
+# Do not add either here.
+
+node_modules/
+frontend/dist/
+
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+.env
+.env.local
+.env.*.local
+
+# Local SQLite (prod lives on the Fly volume at /data)
+*.db
+*.db-wal
+*.db-shm
+
+.DS_Store
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,44 @@
+app = "ticker-dash"
+primary_region = "bos"          # near you; also near US market data endpoints
+
+# Default is SIGINT + 5s, which is not enough to close N browser sockets and
+# the upstream feed cleanly. Give the shutdown handler room.
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+
+[env]
+  PORT = "8080"
+  DB_PATH = "/data/ticker.db"
+
+[deploy]
+  strategy = "immediate"   # single machine + volume: rolling just adds wait time
+
+[mounts]
+  source = "ticker_data"
+  destination = "/data"
+  initial_size = "1gb"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"     # MUST be the string "off", not false
+  auto_start_machines = false    # docs: keep both enabled or both disabled
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 150
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "20s"           # covers DB init + first upstream WS connect
+  method = "GET"
+  path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

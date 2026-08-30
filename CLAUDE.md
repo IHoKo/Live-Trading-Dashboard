@@ -1,0 +1,222 @@
+# CLAUDE.md — Ticker
+
+Decisions already made. Do not re-litigate these in later sessions; if one genuinely
+needs to change, say so explicitly and update this file in the same change.
+
+The full rationale lives in `plan.md`. Section references below point there.
+
+---
+
+## Stack — locked (§3)
+
+| Layer | Choice | Why this and not the alternative |
+|---|---|---|
+| Backend | Python 3.12 + FastAPI + Uvicorn | Native async WebSocket/SSE; the Anthropic SDK tool loop is cleanest here |
+| Python deps | **uv** — `pyproject.toml` + committed `uv.lock` | Fast, lockfile-based, and the Docker layer-cache pattern in §9.1 keeps rebuilds short |
+| Frontend | React 18 + Vite + TypeScript | Builds to static files served by the same FastAPI app — one image, one deploy |
+| Charts | `lightweight-charts` (TradingView, Apache-2.0) | Purpose-built for candles/OHLC; far lighter than Recharts or D3 here |
+| State | Zustand + TanStack Query | Zustand for the high-frequency live price map; Query for REST |
+| DB | SQLite + WAL on a Fly Volume | Single user, single machine. Postgres only if this goes multi-user |
+| Migrations | Alembic (or plain versioned `.sql` files) | Never hand-edit the prod schema |
+| AI | Anthropic Messages API, `claude-sonnet-5` | Tool use + server-side web search in one call |
+| Container | Multi-stage Dockerfile (node build → python runtime) | ~200 MB final image |
+
+Rejected: **Next.js full-stack.** It deploys to Fly fine, but long-lived WebSocket
+fan-out and a blocking tool-use loop are more awkward in Node route handlers than in
+FastAPI — and the price hub is the riskiest part of this build.
+
+Market data: **Finnhub** for quotes + trades WS, behind a `MarketDataProvider` Protocol
+so swapping providers is a one-file change (§4). Free-tier terms change quietly — verify
+limits and redisplay rights before making anything public.
+
+---
+
+## Python packaging: uv only
+
+- Dependencies live in `backend/pyproject.toml`. Change them with `uv add` / `uv remove`,
+  never by hand-editing a dependency list and hoping.
+- `backend/uv.lock` is **committed** and must stay committed. It must not be added to
+  `.dockerignore` — the image builds with `uv sync --frozen`, which fails hard if the
+  lockfile is missing. That failure is the desired behavior: a dependency set silently
+  re-resolved on the deploy machine defeats the point of locking.
+- `.venv` **is** in `.dockerignore`. It is platform-specific; the image builds its own.
+- **Never `pip install`. Never create a `requirements.txt`.** If you see either in a diff,
+  that diff is wrong.
+- Local workflow: `uv sync` to set up, `uv add <pkg>` to add, `uv run pytest` to test.
+  No manual venv activation.
+- In the runtime image, put `/app/.venv/bin` on `PATH` and exec `uvicorn` directly rather
+  than wrapping it in `uv run`. `uv run` inserts a process between Fly's `kill_signal` and
+  uvicorn, which breaks the graceful shutdown (§9.1).
+- The uv version in the Dockerfile is pinned to an exact tag. `:latest` makes builds
+  non-reproducible.
+
+---
+
+## One process, one machine (§2, §9.4)
+
+v1 runs on exactly **one** Fly Machine. This is a correctness constraint, not a cost
+optimization:
+
+- A market-data WebSocket is stateful, and providers cap concurrent connections per key.
+  Three machines means three upstream connections and three divergent in-memory caches.
+- SQLite lives on a Fly Volume. Volumes are pinned to one host and cannot be
+  double-mounted, so a second machine means a second, different database file.
+
+Consequences to keep in mind, all accepted:
+
+- `fly scale count 1`, `--ha=false`. Apps with `[mounts]` already default to one machine;
+  make it explicit anyway.
+- `auto_stop_machines = "off"` — the **string** `"off"`, not `false`, which is a config
+  error. `fly launch` writes `"stop"` into generated configs; a stopped machine kills the
+  upstream feed and the in-memory cache, and you come back to a dashboard of stale prices.
+  `auto_start_machines = false` to match (Fly wants both on or both off).
+- Every deploy is 10–30 s of downtime — old machine stops before the new one starts.
+  Acceptable. If it ever isn't, that is the moment to move to Postgres and drop the volume.
+- Run migrations in a FastAPI **lifespan startup hook**, idempotently — not in
+  `release_command`. The release machine runs with no volumes attached, so a migration
+  there writes to an ephemeral disk and vanishes.
+- `/api/health` must be exempt from auth and return 200 before the feed is up. Report feed
+  state in the body, never via the status code — otherwise the health check 401s, the
+  machine is marked unhealthy, and `fly deploy` rolls back with a confusing error while the
+  app is actually running fine.
+
+The scale-out path, when it comes, is a separate `market-data` app publishing to Redis
+pub/sub with web machines subscribing. Not v1.
+
+---
+
+## The model never writes to the database (§7.2)
+
+Chat tools split in two:
+
+- **Read tools** (`get_quote`, `get_candles`, `get_portfolio`, `portfolio_performance`,
+  `get_transactions`, `web_search`) execute immediately.
+- **Write tools are `propose_*` only** (`propose_add_shares`, `propose_remove_shares`).
+  They create a pending action with a UUID and return the resolved details as the tool
+  result. They do not touch `transactions`.
+
+The flow: propose → server validates (symbol resolves, quantity > 0, sells ≤ shares held)
+→ UI renders a confirm card with Confirm / Edit / Cancel → `POST /api/chat/confirm` writes
+the transaction, rebuilds lots, and broadcasts the portfolio to all open tabs. Pending
+actions expire after 5 minutes.
+
+This is not distrust of the model. It is that "sell everything" typed at 2am should hit a
+confirm dialog, the same as any other destructive action. Do not add a tool that writes
+directly, and do not add an "auto-confirm" or "skip confirmation" path.
+
+Every mutation originating from chat carries an idempotency key (`idempotency_keys`
+table). A retried tool call must not double-book a purchase.
+
+---
+
+## Transactions are the source of truth (§5)
+
+- `transactions` is **append-only**. Never edit a row. A correction is a new row, or a
+  delete that reverses and rebuilds.
+- `lots` and `realized_pnl` are **derived** and fully rebuildable from `transactions`
+  alone. There must always be a working rebuild-from-scratch function.
+- **Positions are computed, never stored** — one query over `lots` grouped by symbol.
+  There is deliberately no mutable `holdings.shares` column: average cost silently loses
+  information the moment you sell part of a position.
+- Cost basis is **FIFO** by default (configurable to average-cost). A SELL consumes the
+  oldest open lots and writes a `realized_pnl` row.
+- Money is `REAL` for v1: round to 4 dp on write, format with `Decimal` at the
+  presentation layer. If this ever handles real accounting, switch to integer minor units.
+- The lot engine is the part that must be unit-tested hard, and tests come first
+  (`backend/tests/test_lots.py`): partial sells, sells crossing multiple lots, oversell
+  rejection, delete-and-rebuild consistency, and a hand-computed expected P/L over a seeded
+  transaction set.
+
+---
+
+## Never recommend trades (§11, §7.3)
+
+This app **reports data and answers questions**. It must never be built or prompted to
+recommend trades.
+
+- The chat system prompt forbids buy/sell recommendations, price targets, and predictions.
+  It describes what happened and what the data shows. Trades are the user's call.
+- Prefer tools over model memory: prices, holdings, and news all come from tools.
+- When no clear cause for a move is found, say so plainly rather than inventing a
+  narrative. Cite sources for anything from the web.
+- Every AI response ships with a disclaimer; there is also a persistent footer disclaimer.
+- Label data honestly in the UI: `LIVE` / `DELAYED` / `STALE 4m` / `CLOSED`. Never render a
+  stale number as if it were live.
+
+---
+
+## API keys are server-side only (§11)
+
+- `ANTHROPIC_API_KEY`, `FINNHUB_API_KEY`, `SESSION_SECRET`, `APP_PASSPHRASE` are read
+  server-side via pydantic-settings and **never** reach the browser bundle.
+- No key may appear in any `VITE_*` variable, in frontend source, or in a client-side
+  fetch — **not even "just for local dev."** Vite inlines `VITE_*` into the built JS.
+- All provider and Anthropic calls go through the backend. In production, secrets come from
+  `fly secrets set`; locally from `.env`, which is gitignored and dockerignored.
+- Auth is a passphrase → signed HttpOnly, `Secure`, `SameSite=Lax` session cookie, with a
+  rate limit on the login endpoint. This is a single-user app on the public internet;
+  assume it will be found.
+- Rate-limit `/api/chat/stream` (token bucket, ~20 messages/hour) so a stuck retry loop
+  cannot run up an API bill.
+- Pydantic validation on every input. Symbols normalized and validated against the
+  provider's search before storage.
+
+---
+
+## Repo layout (§14)
+
+```
+ticker/
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI app, static mount, routers
+│   │   ├── config.py            # env via pydantic-settings
+│   │   ├── deps.py              # auth, db session
+│   │   ├── db/                  # schema.sql, migrations, connection
+│   │   ├── providers/           # base.py, finnhub.py
+│   │   ├── services/
+│   │   │   ├── price_hub.py     # upstream WS, cache, fan-out
+│   │   │   ├── portfolio.py     # lot engine, P/L
+│   │   │   └── chat.py          # Anthropic loop, tool dispatch
+│   │   ├── routers/             # quotes, portfolio, chat, ws, auth
+│   │   └── models.py
+│   ├── tests/                   # test_lots.py first
+│   ├── pyproject.toml           # deps live here; uv add to change them
+│   └── uv.lock                  # committed
+├── frontend/
+│   └── src/
+│       ├── components/          # TickerTape, PositionsTable, Chart, Chat, ConfirmCard
+│       ├── hooks/               # usePriceSocket, usePortfolio, useChat
+│       ├── store/               # prices.ts (zustand)
+│       └── styles/tokens.css    # the §8.2 palette and type scale
+├── Dockerfile
+├── fly.toml
+└── plan.md
+```
+
+New code goes in one of these places. Don't invent a parallel structure.
+
+---
+
+## Other standing details worth not rediscovering
+
+- **Coalesce ticks**: buffer per symbol, flush at most every 250 ms. A liquid symbol prints
+  hundreds of trades per second; this single detail is the difference between a smooth
+  dashboard and a locked-up tab (§6).
+- **Fallback ladder** (implement all three — markets are closed most of the week): upstream
+  WS → 15 s REST polling for watchlist symbols only → last known price with a
+  `stale_since` timestamp, greyed in the UI (§4).
+- **Serve the SPA with a catch-all route**, not just a static mount. Mount assets at
+  `/assets`, register API and WS routes, then a final route returning `index.html` for
+  anything unmatched — otherwise a hard refresh at `/portfolio` 404s (§9.4).
+- **Idle WS through the Fly proxy** needs application-level pings: server pings every 30 s,
+  client responds. Client reconnects with exponential backoff, 1 s → 30 s cap, and
+  re-subscribes on open (§8.3, §9.4).
+- **The volume is not backed up by default.** Nightly `sqlite3 .backup` to a second file on
+  the volume, pulled down periodically. Fly snapshots are the second line, not the first.
+- **Visual direction is an exchange board**, not the default finance-dashboard look
+  (near-black + acid green). Desaturated gain/loss, split-flap tape, brass accent, tabular
+  numerals on every column of numbers. Full palette and type scale in §8.2 — implement it
+  in `frontend/src/styles/tokens.css` and read from tokens, not hardcoded hex.
+- Check https://docs.claude.com for current model IDs and tool versions (e.g. the
+  `web_search` tool version) before writing the Anthropic call.
