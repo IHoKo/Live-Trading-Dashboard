@@ -10,10 +10,11 @@ grace period on a cold boot (plan.md §9.2).
 
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.services.market_hours import is_market_open
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -21,14 +22,22 @@ router = APIRouter(prefix="/api", tags=["health"])
 class Health(BaseModel):
     status: Literal["ok"] = "ok"
     provider: str
-    # "not_started" until the PriceHub lands in Phase 2; then live/polling/down.
     feed: Literal["not_started", "live", "polling", "down"] = "not_started"
     ws_connected: bool = False
-    # None until market-hours awareness lands with the hub in Phase 2. Reported
-    # as null rather than a guessed boolean — a wrong "open" is worse than none.
     market_open: bool | None = None
+    subscribed_symbols: int = 0
 
 
 @router.get("/health", response_model=Health)
-async def health() -> Health:
-    return Health(provider=get_settings().provider)
+async def health(request: Request) -> Health:
+    hub = getattr(request.app.state, "hub", None)
+    if hub is None:
+        # No market data configured. Still 200 — see the module docstring.
+        return Health(provider=get_settings().provider, market_open=is_market_open())
+    return Health(
+        provider=get_settings().provider,
+        feed=hub.state.value,
+        ws_connected=hub.upstream_connected,
+        market_open=is_market_open(),
+        subscribed_symbols=len(hub.tracked_symbols()),
+    )

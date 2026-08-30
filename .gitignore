@@ -24,3 +24,6 @@ __pycache__/
 *.swp
 .idea/
 .vscode/
+
+# Ad-hoc screenshots dropped in the repo root while debugging
+Screenshot*.png

@@ -16,7 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.providers.cache import CachingProvider
 from app.providers.finnhub import FinnhubProvider
-from app.routers import health, quotes
+from app.routers import health, quotes, ws
+from app.services.price_hub import PriceHub
 
 logger = logging.getLogger("ticker")
 
@@ -51,8 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # defeat both and burn the free tier's 60 calls/minute.
     if settings.finnhub_api_key:
         app.state.provider = CachingProvider(FinnhubProvider(settings.finnhub_api_key))
+        # One hub for the process: one upstream connection, one cache (§2).
+        app.state.hub = PriceHub(app.state.provider)
+        await app.state.hub.start()
     else:
         app.state.provider = None
+        app.state.hub = None
         logger.warning(
             "FINNHUB_API_KEY is unset — market data endpoints will return 503. "
             "The app still boots and /api/health still passes."
@@ -60,8 +65,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    # Phase 2 also closes the upstream feed and the browser sockets here.
+    # Close the feed and the browser sockets before the provider's HTTP client.
     # fly.toml allows 30s for it (kill_signal = SIGTERM, kill_timeout = 30s).
+    hub = getattr(app.state, "hub", None)
+    if hub is not None:
+        await hub.stop()
     provider = getattr(app.state, "provider", None)
     if provider is not None:
         await provider.aclose()
@@ -85,6 +93,9 @@ app.include_router(health.router)
 api = APIRouter(prefix="/api")
 api.include_router(quotes.router)
 app.include_router(api)
+
+# WebSocket fan-out. Registered before the SPA catch-all, like the API routes.
+app.include_router(ws.router)
 
 # --- 3. Built frontend assets ----------------------------------------------
 # Hashed, immutable files from the Vite build. Mounted at /assets specifically

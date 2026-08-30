@@ -1,0 +1,125 @@
+import { useEffect, useRef, useState } from 'react'
+
+import { useSymbols } from '../hooks/usePriceSocket'
+import { freshness, selectTick, usePriceStore } from '../store/prices'
+
+/**
+ * The always-on strip from §8.1.
+ *
+ * Phase 2 builds the mechanism: live subscription, per-symbol rendering, honest
+ * staleness labels. The split-flap flip from §8.2 is the Phase 6 design pass —
+ * this uses a brief tint wash on change, which is the restrained half of that
+ * spec and already respects prefers-reduced-motion.
+ */
+
+// Phase 3 replaces this with the watchlist table (§5).
+export const DEFAULT_WATCHLIST = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA']
+
+export function TickerTape({ symbols = DEFAULT_WATCHLIST }: { symbols?: string[] }) {
+  useSymbols(symbols)
+  const status = usePriceStore((s) => s.status)
+  const connection = usePriceStore((s) => s.connection)
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'stretch',
+        gap: 0,
+        borderBottom: '1px solid var(--rule)',
+        background: 'var(--slate)',
+        overflowX: 'auto',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 var(--space-3)',
+          borderRight: '1px solid var(--rule)',
+          color: 'var(--brass)',
+          fontFamily: 'var(--font-display)',
+          letterSpacing: '0.12em',
+          fontSize: '0.7rem',
+          whiteSpace: 'nowrap',
+        }}
+        title={
+          status
+            ? `${status.provider} · feed ${status.state} · market ${status.market_open ? 'open' : 'closed'}`
+            : 'connecting'
+        }
+      >
+        {connection === 'open' ? 'TAPE' : connection === 'connecting' ? 'TAPE ·' : 'TAPE ✕'}
+      </div>
+
+      {symbols.map((symbol) => (
+        <TapeCell key={symbol} symbol={symbol} />
+      ))}
+    </div>
+  )
+}
+
+function TapeCell({ symbol }: { symbol: string }) {
+  // Selecting one symbol means one print re-renders one cell (§8.3).
+  const tick = usePriceStore(selectTick(symbol))
+  const status = usePriceStore((s) => s.status)
+  const flash = useFlash(tick?.p)
+  const fresh = freshness(tick, status)
+
+  const up = (tick?.dp ?? 0) >= 0
+  const changeColor = tick?.dp == null ? 'var(--muted)' : up ? 'var(--gain)' : 'var(--loss)'
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        padding: 'var(--space-2) var(--space-3)',
+        borderRight: '1px solid var(--rule)',
+        minWidth: '8.5rem',
+        // The §8.2 tint wash: brass for up, slate for down, decaying.
+        background: flash ? (up ? 'color-mix(in srgb, var(--brass) 18%, transparent)' : 'color-mix(in srgb, var(--loss) 16%, transparent)') : 'transparent',
+        transition: 'background 400ms ease-out',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)' }}>
+        <span style={{ fontWeight: 600, letterSpacing: '0.04em' }}>{symbol}</span>
+        <span
+          className="num"
+          style={{ fontSize: '0.6rem', color: fresh.tone === 'live' ? 'var(--gain)' : fresh.tone === 'stale' ? 'var(--loss)' : 'var(--muted)' }}
+        >
+          {fresh.label}
+        </span>
+      </div>
+      <div className="num" style={{ fontSize: 'var(--step-1)' }}>
+        {tick ? tick.p.toFixed(2) : '––.––'}
+      </div>
+      <div className="num" style={{ fontSize: '0.7rem', color: changeColor }}>
+        {tick?.dp == null ? '—' : `${up ? '▲' : '▼'} ${Math.abs(tick.dp).toFixed(2)}%`}
+      </div>
+    </div>
+  )
+}
+
+/** Brief true after the value changes, so the cell can tint and decay. */
+function useFlash(value: number | undefined, ms = 400): boolean {
+  const [on, setOn] = useState(false)
+  const previous = useRef(value)
+
+  useEffect(() => {
+    if (previous.current === value || value === undefined) return
+    previous.current = value
+
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reduced) return // §8.3 accessibility floor
+
+    setOn(true)
+    const timer = window.setTimeout(() => setOn(false), ms)
+    return () => window.clearTimeout(timer)
+  }, [value, ms])
+
+  return on
+}

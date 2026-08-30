@@ -6,7 +6,8 @@ unknown symbol comes back as a zero-filled 200 rather than a 404.
 """
 
 import asyncio
-from typing import Any
+import json
+from typing import Any, Self
 
 import httpx
 import pytest
@@ -223,10 +224,85 @@ async def test_search_maps_results_and_skips_rows_without_a_symbol() -> None:
     assert results[0].description == "APPLE INC"
 
 
-# --- stream is Phase 2 ------------------------------------------------------
+# --- upstream trade stream --------------------------------------------------
 
 
-def test_stream_is_not_implemented_yet() -> None:
-    provider = make_provider(lambda _r: httpx.Response(200, json={}))
-    with pytest.raises(NotImplementedError, match="Phase 2"):
-        provider.stream({"AAPL"})
+class FakeSocket:
+    """Stands in for a websockets connection: async CM + async iterator."""
+
+    def __init__(self, messages: list[str]) -> None:
+        self._messages = messages
+        self.sent: list[str] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def __aiter__(self):
+        for message in self._messages:
+            yield message
+
+
+def patch_socket(monkeypatch: pytest.MonkeyPatch, messages: list[str]) -> FakeSocket:
+    import app.providers.finnhub as mod
+
+    sock = FakeSocket(messages)
+    monkeypatch.setattr(mod.websockets, "connect", lambda *a, **k: sock)
+    return sock
+
+
+async def test_stream_yields_trades(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = json.dumps(
+        {
+            "type": "trade",
+            "data": [
+                {"s": "AAPL", "p": 213.44, "t": 1754800000000, "v": 100},
+                {"s": "NVDA", "p": 98.10, "t": 1754800000500, "v": 5},
+            ],
+        }
+    )
+    patch_socket(monkeypatch, [payload])
+    provider = make_provider(lambda _r: httpx.Response(200, json=QUOTE_OK))
+
+    trades = [t async for t in provider.stream({"AAPL", "NVDA"})]
+
+    assert [(t.symbol, t.price) for t in trades] == [("AAPL", 213.44), ("NVDA", 98.10)]
+    assert trades[0].timestamp_ms == 1754800000000
+
+
+async def test_stream_subscribes_to_every_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = patch_socket(monkeypatch, [])
+    provider = make_provider(lambda _r: httpx.Response(200, json=QUOTE_OK))
+
+    _ = [t async for t in provider.stream({"NVDA", "AAPL"})]
+
+    assert [json.loads(m)["symbol"] for m in sock.sent] == ["AAPL", "NVDA"]
+    assert all(json.loads(m)["type"] == "subscribe" for m in sock.sent)
+
+
+async def test_stream_ignores_pings_and_malformed_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bad print must not kill the feed — that would take the tape down."""
+    messages = [
+        json.dumps({"type": "ping"}),
+        "not json at all",
+        json.dumps({"type": "trade", "data": [{"s": "AAPL"}]}),  # missing price
+        json.dumps({"type": "trade", "data": [{"s": "AAPL", "p": "x", "t": 1}]}),  # bad price
+        json.dumps({"type": "trade", "data": [{"s": "AAPL", "p": 1.5, "t": 2}]}),  # good
+    ]
+    patch_socket(monkeypatch, messages)
+    provider = make_provider(lambda _r: httpx.Response(200, json=QUOTE_OK))
+
+    trades = [t async for t in provider.stream({"AAPL"})]
+
+    assert len(trades) == 1
+    assert trades[0].price == 1.5
+
+
+async def test_stream_with_no_symbols_does_not_open_a_socket() -> None:
+    provider = make_provider(lambda _r: httpx.Response(200, json=QUOTE_OK))
+    assert [t async for t in provider.stream(set())] == []

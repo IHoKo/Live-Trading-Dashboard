@@ -47,11 +47,15 @@ def test_no_app_wide_auth_would_wrap_health() -> None:
 
 
 def test_health_reports_feed_state_in_body_not_status_code() -> None:
-    """200 even with the feed down, or the machine never passes a cold boot."""
-    body = client.get("/api/health").json()
+    """200 even with no feed, or the machine never passes a cold boot."""
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    body = res.json()
+    # No FINNHUB_API_KEY in the test env, so there is no hub.
     assert body["feed"] == "not_started"
     assert body["ws_connected"] is False
-    assert body["market_open"] is None
+    # Market hours no longer depend on the feed, so this is a real answer.
+    assert isinstance(body["market_open"], bool)
 
 
 # --- SPA catch-all ----------------------------------------------------------

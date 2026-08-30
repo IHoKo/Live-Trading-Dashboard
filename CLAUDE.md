@@ -198,6 +198,23 @@ New code goes in one of these places. Don't invent a parallel structure.
 
 ---
 
+## Verified facts that override the plan
+
+**Finnhub's free tier does not include `/stock/candle`.** Confirmed in production
+2026-08-30: the same key that serves `/quote` and `/search` gets **HTTP 403** on
+candles. §4 recommends Finnhub for v1 and §3 assumes it covers charts; it does not.
+Phase 4 therefore needs a decision — pay for a Finnhub tier, or serve candles from a
+second provider behind the same `MarketDataProvider` interface while quotes stay on
+Finnhub. `/api/candles` surfaces this as a 502 with an actionable message rather
+than a generic error. Do not assume charts "just work" when you get to Phase 4.
+
+**Polling cannot literally be "every 15s for the whole watchlist" (§4 rung 2).**
+The free tier allows 60 calls/minute, so N symbols every 15s breaks the limit at
+N > 15. `PriceHub` spaces upstream REST calls to a budget (50/min) and lets a poll
+cycle take longer than its nominal interval when the watchlist is large. The §4
+interval is a target, not a guarantee. Polling also backs off to 60s when the market
+is closed, because closing prices do not move.
+
 ## Other standing details worth not rediscovering
 
 - **Coalesce ticks**: buffer per symbol, flush at most every 250 ms. A liquid symbol prints

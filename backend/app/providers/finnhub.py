@@ -6,12 +6,14 @@ only, and that includes not scattering them through log lines).
 """
 
 import asyncio
+import json
 import logging
 import random
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+import websockets
 
 from app.providers.base import (
     AccessDenied,
@@ -50,6 +52,7 @@ class FinnhubProvider(MarketDataProvider):
     ) -> None:
         if not api_key:
             raise ValueError("FINNHUB_API_KEY is required to construct FinnhubProvider")
+        self._api_key = api_key
         self._max_attempts = max_attempts
         self._base_backoff = base_backoff
         self._owns_client = client is None
@@ -184,8 +187,45 @@ class FinnhubProvider(MarketDataProvider):
             if row.get("symbol")
         ]
 
-    def stream(self, symbols: set[str]) -> AsyncIterator[Trade]:
-        raise NotImplementedError("Upstream trade stream lands with the PriceHub in Phase 2.")
+    async def stream(self, symbols: set[str]) -> AsyncIterator[Trade]:
+        """Yield trade prints for `symbols` from Finnhub's socket.
+
+        The symbol set is fixed for the life of the iterator, per the §4
+        interface. The hub restarts the stream when its subscription set
+        changes; watchlist edits are human-paced, so a brief reconnect is
+        cheaper than leaking a vendor-specific "resubscribe" method through
+        the provider abstraction.
+
+        Unlike the REST calls, the key has to travel in the query string —
+        the WS handshake takes no custom headers. It is TLS-encrypted in
+        transit, but never log this URL.
+        """
+        if not symbols:
+            return
+
+        url = f"wss://ws.finnhub.io?token={self._api_key}"
+        async with websockets.connect(url, ping_interval=20, ping_timeout=20) as sock:
+            for symbol in sorted(symbols):
+                await sock.send(json.dumps({"type": "subscribe", "symbol": symbol}))
+            logger.info("finnhub socket open, subscribed to %d symbol(s)", len(symbols))
+
+            async for raw in sock:
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                if msg.get("type") != "trade":
+                    continue  # 'ping' and errors are not trades
+                for row in msg.get("data") or []:
+                    try:
+                        yield Trade(
+                            symbol=row["s"],
+                            price=float(row["p"]),
+                            timestamp_ms=int(row["t"]),
+                            volume=_opt_float(row.get("v")),
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        continue  # a malformed print must not kill the feed
 
 
 def _opt_float(value: Any) -> float | None:
