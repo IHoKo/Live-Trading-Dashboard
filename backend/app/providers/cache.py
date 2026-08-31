@@ -19,6 +19,7 @@ from app.providers.base import (
     Quote,
     Resolution,
     SymbolMatch,
+    SymbolNotFound,
     Trade,
 )
 
@@ -120,6 +121,13 @@ class TTLCache:
             self._store(key, value)
             return value
 
+    def get(self, key: Any) -> tuple[bool, Any]:
+        """(hit, value). Sync, because a negative lookup must not await."""
+        return self._live(key)
+
+    def set(self, key: Any, value: Any) -> None:
+        self._store(key, value)
+
     def invalidate(self) -> None:
         self._entries.clear()
         self._locks = {k: v for k, v in self._locks.items() if v.locked()}
@@ -140,14 +148,29 @@ class CachingProvider(MarketDataProvider):
         *,
         quote_ttl: float = 5.0,
         candle_ttl: float = 60.0,
+        not_found_ttl: float = 300.0,
     ) -> None:
         self._inner = inner
         self.name = inner.name
         self._quotes = TTLCache(quote_ttl)
         self._candles = TTLCache(candle_ttl)
+        # Negative cache. A symbol the provider does not know will not start
+        # existing in the next few seconds, but without this a single typo'd
+        # ticker in the watchlist costs one upstream call on every poll — from
+        # a budget of 60 a minute. Held far longer than a real quote, because
+        # the answer is far more stable.
+        self._missing = TTLCache(not_found_ttl)
 
     async def quote(self, symbol: str) -> Quote:
-        return await self._quotes.get_or_set(symbol, lambda: self._inner.quote(symbol))
+        known_missing, _ = self._missing.get(symbol)
+        if known_missing:
+            raise SymbolNotFound(f"{symbol!r} is not a known symbol (cached)")
+
+        try:
+            return await self._quotes.get_or_set(symbol, lambda: self._inner.quote(symbol))
+        except SymbolNotFound:
+            self._missing.set(symbol, True)
+            raise
 
     async def candles(self, symbol: str, resolution: Resolution, frm: int, to: int) -> list[Candle]:
         # Keyed on the window's LENGTH, never its absolute position. An

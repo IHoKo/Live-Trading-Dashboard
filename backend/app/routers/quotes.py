@@ -8,6 +8,7 @@ These hang off the authenticated API router in `main.py`. Unlike /api/health,
 they are meant to sit behind the session check once Phase 6 adds it.
 """
 
+import asyncio
 import time
 from typing import Annotated, Literal
 
@@ -30,6 +31,12 @@ router = APIRouter(tags=["market-data"])
 
 MAX_SYMBOLS_PER_REQUEST = 50
 MAX_SEARCH_RESULTS = 25
+
+# Ceiling on one /api/quotes call. Symbols are fetched sequentially with a
+# 10s per-call timeout, so without this a slow upstream could hold a request
+# open for MAX_SYMBOLS_PER_REQUEST x 10s. Whatever has been fetched by the
+# deadline is returned; the rest come back as unavailable.
+QUOTES_DEADLINE_SECONDS = 15.0
 
 ChartRange = Literal["1D", "5D", "1M", "6M", "1Y", "5Y"]
 
@@ -67,9 +74,12 @@ class QuoteOut(BaseModel):
 
 class QuotesResponse(BaseModel):
     quotes: list[QuoteOut]
-    # Symbols the provider had no data for. Reported rather than failing the
-    # whole request, so one bad ticker can't blank an entire watchlist.
+    # Symbols with no data this time round: unknown to the provider, or not
+    # reached before the rate limit or the deadline. Reported rather than
+    # failing the whole request, so one bad ticker can't blank a watchlist.
     unavailable: list[str] = Field(default_factory=list)
+    # Set when the result is incomplete, explaining why. Null on a full result.
+    notice: str | None = None
 
 
 class CandlesResponse(BaseModel):
@@ -145,32 +155,55 @@ async def get_quotes(
 
     out: list[QuoteOut] = []
     unavailable: list[str] = []
+    notice: str | None = None
+    rate_limited: RateLimited | None = None
 
     # Sequential on purpose. Fanning out concurrently would multiply the burst
     # against a 60 calls/minute budget, and the 5s cache already collapses the
     # repeat traffic that actually dominates here.
-    for symbol in wanted:
-        try:
-            quote = await provider.quote(symbol)
-        except SymbolNotFound:
-            unavailable.append(symbol)
-            continue
-        except ProviderError as exc:
-            _raise_for_provider_error(exc)
-            raise  # unreachable; satisfies the type checker
-        out.append(
-            QuoteOut(
-                symbol=quote.symbol,
-                price=quote.price,
-                change=quote.change,
-                change_pct=quote.change_pct,
-                prev_close=quote.prev_close,
-                as_of=quote.as_of,
-                age_seconds=max(0, now - quote.as_of) if quote.as_of else None,
-            )
-        )
+    try:
+        async with asyncio.timeout(QUOTES_DEADLINE_SECONDS):
+            for symbol in wanted:
+                try:
+                    quote = await provider.quote(symbol)
+                except SymbolNotFound:
+                    unavailable.append(symbol)
+                    continue
+                except RateLimited as exc:
+                    # Stop, but keep what we already have. Discarding fetched
+                    # quotes here would contradict `unavailable` existing at all.
+                    rate_limited = exc
+                    break
+                except ProviderError as exc:
+                    _raise_for_provider_error(exc)
+                    raise  # unreachable; satisfies the type checker
+                out.append(
+                    QuoteOut(
+                        symbol=quote.symbol,
+                        price=quote.price,
+                        change=quote.change,
+                        change_pct=quote.change_pct,
+                        prev_close=quote.prev_close,
+                        as_of=quote.as_of,
+                        age_seconds=max(0, now - quote.as_of) if quote.as_of else None,
+                    )
+                )
+    except TimeoutError:
+        notice = f"Upstream was too slow; stopped after {QUOTES_DEADLINE_SECONDS:g}s."
 
-    return QuotesResponse(quotes=out, unavailable=unavailable)
+    if rate_limited is not None:
+        notice = "Upstream rate limit reached; some symbols were not fetched."
+
+    fetched = {q.symbol for q in out}
+    missed = [s for s in wanted if s not in fetched and s not in unavailable]
+    unavailable.extend(missed)
+
+    # Nothing usable came back, so there is no partial result to serve — report
+    # the underlying failure instead of a misleadingly empty 200.
+    if not out and rate_limited is not None:
+        _raise_for_provider_error(rate_limited)
+
+    return QuotesResponse(quotes=out, unavailable=unavailable, notice=notice)
 
 
 @router.get("/candles/{symbol}", response_model=CandlesResponse)

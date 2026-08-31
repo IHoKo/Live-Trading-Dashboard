@@ -9,7 +9,8 @@ import asyncio
 import json
 import logging
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -130,28 +131,32 @@ class FinnhubProvider(MarketDataProvider):
     # --- interface ----------------------------------------------------------
 
     async def quote(self, symbol: str) -> Quote:
-        data = await self._get("/quote", {"symbol": symbol})
+        data = _as_object(await self._get("/quote", {"symbol": symbol}), "/quote")
 
         # An unknown symbol is a 200 with a zero-filled body, not a 404.
         if not data or (data.get("c") in (0, None) and data.get("pc") in (0, None)):
             raise SymbolNotFound(f"finnhub has no quote for {symbol!r}")
 
-        return Quote(
-            symbol=symbol,
-            price=float(data["c"]),
-            change=_opt_float(data.get("d")),
-            change_pct=_opt_float(data.get("dp")),
-            high=_opt_float(data.get("h")),
-            low=_opt_float(data.get("l")),
-            open=_opt_float(data.get("o")),
-            prev_close=_opt_float(data.get("pc")),
-            as_of=int(data.get("t") or 0),
-        )
+        with _parsing("/quote", symbol):
+            return Quote(
+                symbol=symbol,
+                price=float(data["c"]),
+                change=_opt_float(data.get("d")),
+                change_pct=_opt_float(data.get("dp")),
+                high=_opt_float(data.get("h")),
+                low=_opt_float(data.get("l")),
+                open=_opt_float(data.get("o")),
+                prev_close=_opt_float(data.get("pc")),
+                as_of=int(data.get("t") or 0),
+            )
 
     async def candles(self, symbol: str, resolution: Resolution, frm: int, to: int) -> list[Candle]:
-        data = await self._get(
+        data = _as_object(
+            await self._get(
+                "/stock/candle",
+                {"symbol": symbol, "resolution": resolution, "from": frm, "to": to},
+            ),
             "/stock/candle",
-            {"symbol": symbol, "resolution": resolution, "from": frm, "to": to},
         )
 
         status = data.get("s")
@@ -160,32 +165,34 @@ class FinnhubProvider(MarketDataProvider):
         if status != "ok":
             raise ProviderError(f"finnhub candle status {status!r} for {symbol!r}")
 
-        return [
-            Candle(
-                time=int(t),
-                open=float(o),
-                high=float(h),
-                low=float(low),
-                close=float(c),
-                volume=float(v),
-            )
-            for t, o, h, low, c, v in zip(
-                data["t"], data["o"], data["h"], data["l"], data["c"], data["v"], strict=True
-            )
-        ]
+        with _parsing("/stock/candle", symbol):
+            return [
+                Candle(
+                    time=int(t),
+                    open=float(o),
+                    high=float(h),
+                    low=float(low),
+                    close=float(c),
+                    volume=float(v),
+                )
+                for t, o, h, low, c, v in zip(
+                    data["t"], data["o"], data["h"], data["l"], data["c"], data["v"], strict=True
+                )
+            ]
 
     async def search(self, query: str) -> list[SymbolMatch]:
-        data = await self._get("/search", {"q": query})
-        return [
-            SymbolMatch(
-                symbol=row["symbol"],
-                display_symbol=row.get("displaySymbol") or row["symbol"],
-                description=row.get("description", ""),
-                type=row.get("type", ""),
-            )
-            for row in data.get("result", [])
-            if row.get("symbol")
-        ]
+        data = _as_object(await self._get("/search", {"q": query}), "/search")
+        with _parsing("/search", query):
+            return [
+                SymbolMatch(
+                    symbol=row["symbol"],
+                    display_symbol=row.get("displaySymbol") or row["symbol"],
+                    description=row.get("description", ""),
+                    type=row.get("type", ""),
+                )
+                for row in data.get("result", [])
+                if isinstance(row, dict) and row.get("symbol")
+            ]
 
     async def stream(self, symbols: set[str]) -> AsyncIterator[Trade]:
         """Yield trade prints for `symbols` from Finnhub's socket.
@@ -226,6 +233,36 @@ class FinnhubProvider(MarketDataProvider):
                         )
                     except (KeyError, TypeError, ValueError):
                         continue  # a malformed print must not kill the feed
+
+
+def _as_object(data: Any, path: str) -> dict[str, Any]:
+    """Upstream must hand back a JSON object here.
+
+    Anything else — a bare list, a string — would blow up on `.get` as an
+    AttributeError, which escapes ProviderError and reaches the client as a 500.
+    An upstream that changed shape is an upstream problem: say so with a 502.
+    """
+    if not isinstance(data, dict):
+        raise ProviderError(
+            f"finnhub returned {type(data).__name__}, expected an object, on {path}"
+        )
+    return data
+
+
+@contextmanager
+def _parsing(path: str, subject: str) -> Iterator[None]:
+    """Turn payload-shape failures into ProviderError.
+
+    Ragged parallel arrays (`zip(strict=True)`), a price of "n/a", a missing
+    key — all of them are the upstream disagreeing with its own documented
+    shape, and all of them used to surface as an unhandled 500.
+    """
+    try:
+        yield
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProviderError(
+            f"finnhub sent an unparseable payload on {path} for {subject!r}: {exc}"
+        ) from exc
 
 
 def _opt_float(value: Any) -> float | None:

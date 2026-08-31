@@ -437,3 +437,105 @@ def _value(v: Any) -> Any:
         return v
 
     return factory
+
+
+# --- negative caching -------------------------------------------------------
+
+
+async def test_an_unknown_symbol_is_only_looked_up_once() -> None:
+    """A typo'd ticker in the watchlist used to cost an upstream call on every
+    poll, out of a budget of 60 a minute."""
+    inner = FakeProvider()
+    inner.raise_on_quote = SymbolNotFound("nope")
+    cached = CachingProvider(inner)
+
+    for _ in range(10):
+        with pytest.raises(SymbolNotFound):
+            await cached.quote("NOTREAL")
+
+    assert inner.quote_calls == ["NOTREAL"], "ten lookups, one upstream call"
+
+
+async def test_the_negative_cache_expires() -> None:
+    inner = FakeProvider()
+    inner.raise_on_quote = SymbolNotFound("nope")
+    cached = CachingProvider(inner, not_found_ttl=0.0)
+
+    for _ in range(3):
+        with pytest.raises(SymbolNotFound):
+            await cached.quote("NOTREAL")
+
+    assert len(inner.quote_calls) == 3, "a zero TTL must not pin the answer forever"
+
+
+async def test_a_real_symbol_is_unaffected_by_the_negative_cache() -> None:
+    inner = FakeProvider()
+    cached = CachingProvider(inner)
+    assert (await cached.quote("AAPL")).price == 100.0
+
+
+# --- deadline and partial results -------------------------------------------
+
+
+def test_a_rate_limit_partway_through_keeps_what_was_fetched(
+    client: TestClient, provider: Any
+) -> None:
+    """The review found this discarding good quotes — which contradicted the
+    whole point of the `unavailable` field sitting next to it."""
+    calls = {"n": 0}
+    plain = provider.quote
+
+    async def limited(symbol: str) -> Any:
+        calls["n"] += 1
+        if calls["n"] > 2:
+            raise RateLimited("slow down", retry_after=5)
+        return await plain(symbol)
+
+    provider.quote = limited
+    res = client.get("/api/quotes", params={"symbols": "A,B,C,D"})
+
+    assert res.status_code == 200
+    body = res.json()
+    assert [q["symbol"] for q in body["quotes"]] == ["A", "B"], "fetched quotes are kept"
+    assert body["unavailable"] == ["C", "D"]
+    assert "rate limit" in body["notice"]
+
+
+def test_a_rate_limit_with_nothing_fetched_is_still_a_429(
+    client: TestClient, provider: Any
+) -> None:
+    """No partial result to serve, so report the real failure."""
+    provider.raise_on_quote = RateLimited("slow down", retry_after=9)
+    res = client.get("/api/quotes", params={"symbols": "A,B"})
+
+    assert res.status_code == 429
+    assert res.headers["Retry-After"] == "9"
+
+
+def test_a_slow_upstream_hits_the_deadline_and_returns_what_it_has(
+    client: TestClient, provider: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.routers.quotes as mod
+
+    monkeypatch.setattr(mod, "QUOTES_DEADLINE_SECONDS", 0.05)
+    plain = provider.quote
+
+    async def slow(symbol: str) -> Any:
+        if symbol != "A":
+            await asyncio.sleep(1.0)
+        return await plain(symbol)
+
+    provider.quote = slow
+    res = client.get("/api/quotes", params={"symbols": "A,B,C"})
+
+    assert res.status_code == 200
+    body = res.json()
+    assert [q["symbol"] for q in body["quotes"]] == ["A"]
+    assert body["unavailable"] == ["B", "C"]
+    assert "too slow" in body["notice"]
+
+
+def test_a_complete_result_carries_no_notice(client: TestClient) -> None:
+    body = client.get("/api/quotes", params={"symbols": "AAPL,MSFT"}).json()
+    assert body["notice"] is None
+    assert body["unavailable"] == []

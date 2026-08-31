@@ -306,3 +306,50 @@ async def test_stream_ignores_pings_and_malformed_rows(monkeypatch: pytest.Monke
 async def test_stream_with_no_symbols_does_not_open_a_socket() -> None:
     provider = make_provider(lambda _r: httpx.Response(200, json=QUOTE_OK))
     assert [t async for t in provider.stream(set())] == []
+
+
+# --- malformed upstream payloads --------------------------------------------
+# Each of these used to escape ProviderError and reach the client as a 500,
+# making an upstream shape change look like a bug in this app.
+
+
+@pytest.mark.parametrize("body", [[1, 2], "a string", 42])
+async def test_a_non_object_body_is_a_provider_error(body: Any) -> None:
+    provider = make_provider(lambda _r: httpx.Response(200, json=body))
+    with pytest.raises(ProviderError, match="expected an object"):
+        await provider.quote("AAPL")
+
+
+async def test_ragged_candle_arrays_are_a_provider_error() -> None:
+    """Parallel arrays of different lengths: zip(strict=True) raises ValueError."""
+    payload = {
+        "s": "ok",
+        "t": [1, 2, 3],
+        "o": [1, 2],
+        "h": [1, 2],
+        "l": [1, 2],
+        "c": [1, 2],
+        "v": [1, 2],
+    }
+    provider = make_provider(lambda _r: httpx.Response(200, json=payload))
+    with pytest.raises(ProviderError, match="unparseable"):
+        await provider.candles("AAPL", "D", 0, 1)
+
+
+async def test_a_non_numeric_price_is_a_provider_error() -> None:
+    provider = make_provider(lambda _r: httpx.Response(200, json={"c": "n/a", "pc": 1, "t": 1}))
+    with pytest.raises(ProviderError, match="unparseable"):
+        await provider.quote("AAPL")
+
+
+async def test_a_missing_candle_column_is_a_provider_error() -> None:
+    payload = {"s": "ok", "t": [1], "o": [1], "h": [1], "c": [1], "v": [1]}  # no "l"
+    provider = make_provider(lambda _r: httpx.Response(200, json=payload))
+    with pytest.raises(ProviderError, match="unparseable"):
+        await provider.candles("AAPL", "D", 0, 1)
+
+
+async def test_a_junk_search_row_is_skipped_not_fatal() -> None:
+    payload = {"result": ["not a dict", {"symbol": "AAPL", "description": "APPLE INC"}]}
+    provider = make_provider(lambda _r: httpx.Response(200, json=payload))
+    assert [m.symbol for m in await provider.search("apple")] == ["AAPL"]
