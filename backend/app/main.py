@@ -9,6 +9,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anthropic
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +18,8 @@ from app.config import get_settings
 from app.db.connection import open_database
 from app.providers.cache import CachingProvider
 from app.providers.finnhub import FinnhubProvider
-from app.routers import health, portfolio, quotes, ws
+from app.routers import chat, health, portfolio, quotes, ws
+from app.services.pending import PendingActionStore, RateLimiter
 from app.services.price_hub import PriceHub
 
 logger = logging.getLogger("ticker")
@@ -55,6 +57,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # release_command: that machine has no volume attached.
     app.state.db = open_database(settings.db_path)
 
+    # Chat state. Pending actions are in memory on purpose: a proposal is a
+    # question awaiting an answer, not a fact about the portfolio (§7.2).
+    app.state.pending = PendingActionStore()
+    app.state.chat_limiter = RateLimiter()  # §11: 20 messages/hour
+    if settings.anthropic_api_key:
+        app.state.anthropic = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    else:
+        app.state.anthropic = None
+        logger.warning("ANTHROPIC_API_KEY is unset — /api/chat/* will return 503.")
+
     if settings.finnhub_api_key:
         app.state.provider = CachingProvider(FinnhubProvider(settings.finnhub_api_key))
         # One hub for the process: one upstream connection, one cache (§2).
@@ -78,6 +90,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider = getattr(app.state, "provider", None)
     if provider is not None:
         await provider.aclose()
+    client = getattr(app.state, "anthropic", None)
+    if client is not None:
+        await client.close()
     db = getattr(app.state, "db", None)
     if db is not None:
         db.close()
@@ -101,6 +116,7 @@ app.include_router(health.router)
 api = APIRouter(prefix="/api")
 api.include_router(quotes.router)
 api.include_router(portfolio.router)
+api.include_router(chat.router)
 app.include_router(api)
 
 # WebSocket fan-out. Registered before the SPA catch-all, like the API routes.

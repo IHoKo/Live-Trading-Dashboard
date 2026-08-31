@@ -200,6 +200,21 @@ New code goes in one of these places. Don't invent a parallel structure.
 
 ## Verified facts that override the plan
 
+**The Anthropic API shapes in §7.1 and §7.4 are stale.** Verified against the live
+API on 2026-08-31 with the project's own key:
+
+- `web_search_20260209` is the current server-tool version. §7.1's
+  `web_search_20250305` still works but is superseded.
+- `thinking: {type: "enabled", budget_tokens: N}` is **rejected with a 400** on
+  `claude-sonnet-5` — "thinking.type.enabled is not supported for this model".
+  Adaptive thinking replaced fixed budgets; omit the parameter or pass
+  `{type: "adaptive"}`.
+- Assistant prefill is removed on this model family; use the system prompt to
+  shape output instead.
+- Model stays `claude-sonnet-5` per §3/§7.4, configurable via `ANTHROPIC_MODEL`.
+
+Re-verify before changing the chat call; this drifts faster than the rest of the plan.
+
 **Finnhub's free tier does not include `/stock/candle`.** Confirmed in production
 2026-08-30: the same key that serves `/quote` and `/search` gets **HTTP 403** on
 candles. §4 recommends Finnhub for v1 and §3 assumes it covers charts; it does not.

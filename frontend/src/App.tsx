@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { Allocation } from './components/Allocation'
+import { Chat } from './components/Chat'
 import { PositionsTable } from './components/PositionsTable'
 import { TickerTape } from './components/TickerTape'
 import { TransactionForm, TransactionHistory } from './components/TransactionForm'
@@ -29,12 +30,22 @@ export function App() {
               flexDirection: 'column',
               gap: 'var(--space-5)',
               padding: 'var(--space-5)',
-              maxWidth: '72rem',
+              maxWidth: '84rem',
               width: '100%',
             }}
           >
             <PortfolioValue />
 
+            <div
+              style={{
+                display: 'grid',
+                gap: 'var(--space-5)',
+                gridTemplateColumns: 'minmax(0, 2fr) minmax(20rem, 1fr)',
+                alignItems: 'start',
+              }}
+              className="dashboard-grid"
+            >
+              <div style={{ display: 'grid', gap: 'var(--space-5)', minWidth: 0 }}>
             <Section title="Positions">
               <PositionsTable />
             </Section>
@@ -50,6 +61,10 @@ export function App() {
             <Section title="History">
               <TransactionHistory />
             </Section>
+              </div>
+
+              <Chat />
+            </div>
 
             <footer
               style={{
