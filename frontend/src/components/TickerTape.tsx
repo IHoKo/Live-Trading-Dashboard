@@ -121,7 +121,7 @@ function RefreshButton({ symbols }: { symbols: string[] }) {
         whiteSpace: 'nowrap',
       }}
     >
-      {pending ? 'FETCHING…' : 'REFRESH'}
+      {pending ? 'FETCHING…' : '↻ REFRESH'}
     </button>
   )
 }
@@ -142,10 +142,10 @@ function TapeCell({ symbol }: { symbol: string }) {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 2,
+        gap: 3,
         padding: 'var(--space-2) var(--space-3)',
         borderRight: '1px solid var(--rule)',
-        minWidth: '9rem',
+        minWidth: '8.75rem',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)' }}>

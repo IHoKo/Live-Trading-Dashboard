@@ -9,6 +9,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import { money } from '../hooks/usePortfolio'
+import { cssColor, cssToken } from '../lib/cssColor'
 
 /**
  * §8.1 chart panel with the §6 range switcher.
@@ -28,13 +29,6 @@ type Candle = {
   low: number
   close: number
   volume: number
-}
-
-function token(name: string, fallback: string): string {
-  if (typeof window === 'undefined') return fallback
-  return (
-    getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
-  )
 }
 
 export function Chart({ symbol }: { symbol: string }) {
@@ -107,22 +101,22 @@ function CandlePanel({ candles }: { candles: Candle[] }) {
       height: 260,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: token('--muted', '#8a8f98'),
-        fontFamily: token('--font-mono', 'monospace'),
+        textColor: cssColor('--muted', '#8a8f98'),
+        fontFamily: cssToken('--font-mono', 'monospace'),
       },
       grid: {
-        vertLines: { color: token('--rule', '#222') },
-        horzLines: { color: token('--rule', '#222') },
+        vertLines: { color: cssColor('--rule', '#222') },
+        horzLines: { color: cssColor('--rule', '#222') },
       },
-      rightPriceScale: { borderColor: token('--rule', '#222') },
-      timeScale: { borderColor: token('--rule', '#222'), timeVisible: false },
+      rightPriceScale: { borderColor: cssColor('--rule', '#222') },
+      timeScale: { borderColor: cssColor('--rule', '#222'), timeVisible: false },
       crosshair: { mode: 0 },
       handleScale: false,
       handleScroll: false,
     })
 
-    const gain = token('--gain', '#2F7D6E')
-    const loss = token('--loss', '#A8442F')
+    const gain = cssColor('--gain', '#2F7D6E')
+    const loss = cssColor('--loss', '#A8442F')
     series.current = instance.addCandlestickSeries({
       upColor: gain,
       downColor: loss,

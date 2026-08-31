@@ -18,7 +18,7 @@ import {
 export function PositionsTable() {
   const { data, isLoading, error } = usePortfolio()
 
-  if (isLoading) return <SkeletonRows />
+  if (isLoading) return <div style={{ padding: 'var(--space-3)' }}><SkeletonRows /></div>
   if (error) return <Panel tone="loss">Could not load portfolio: {error.message}</Panel>
   if (!data || data.positions.length === 0) {
     return (
@@ -64,12 +64,12 @@ export function PositionsTable() {
       </table>
 
       {data.unpriced_symbols.length > 0 && (
-        <p style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: 'var(--space-2)' }}>
+        <p style={{ color: 'var(--muted)', fontSize: '0.75rem', margin: 'var(--space-2) var(--space-3)' }}>
           No price available for {data.unpriced_symbols.join(', ')} — cost basis shown, market
           value omitted.
         </p>
       )}
-      <p style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: 'var(--space-2)' }}>
+      <p style={{ color: 'var(--muted)', fontSize: '0.75rem', margin: '0 var(--space-3) var(--space-3)' }}>
         Realized P/L to date: <span className="num">{money(data.realized_pnl_total)}</span>
       </p>
     </div>
@@ -179,10 +179,9 @@ function Panel({ children, tone }: { children: React.ReactNode; tone?: 'loss' })
     <p
       style={{
         color: tone ? `var(--${tone})` : 'var(--muted)',
-        padding: 'var(--space-3)',
-        border: '1px dashed var(--rule)',
-        borderRadius: 6,
+        padding: 'var(--space-4) var(--space-3)',
         margin: 0,
+        fontSize: '0.85rem',
       }}
     >
       {children}

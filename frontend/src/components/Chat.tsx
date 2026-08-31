@@ -35,8 +35,11 @@ export function Chat() {
         border: '1px solid var(--rule)',
         borderRadius: 6,
         background: 'var(--slate)',
-        minHeight: '30rem',
-        height: '100%',
+        // Tall enough to be a conversation, short enough not to leave a void
+        // on an empty dashboard. Sticks while the left column scrolls.
+        height: 'min(72vh, 44rem)',
+        position: 'sticky',
+        top: 'var(--space-4)',
       }}
     >
       <header

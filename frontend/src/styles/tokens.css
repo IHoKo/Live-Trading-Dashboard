@@ -80,110 +80,91 @@ body {
 }
 
 /* ------------------------------------------------------------------
-   Split-flap board — plan.md §8.2's signature element.
-   Each flap is hinged at the middle: the outgoing character's top half
-   falls, then the incoming character's bottom half swings up.
+   Split-flap board — §8.2's signature element.
+
+   The character is always rendered whole underneath; the flip is a leaf
+   folding away on top of it. Legibility never depends on the animation.
    ------------------------------------------------------------------ */
 
 .flap-row {
   display: inline-flex;
   align-items: stretch;
-  gap: 1px;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 
 .flap-sep {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  align-self: center;
-  padding: 0 1px;
+  align-self: flex-end;
+  padding-bottom: 0.12em;
+  color: var(--muted);
 }
 
 .flap {
   position: relative;
-  display: inline-block;
-  width: 0.62em;
-  height: 1.15em;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  perspective: 240px;
-  background: color-mix(in srgb, var(--ink) 65%, var(--slate));
+  display: inline-grid;
+  place-items: center;
+  min-width: 0.72em;
+  padding: 0.08em 0.1em;
   border-radius: 2px;
+  background: color-mix(in srgb, var(--paper) 6%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--ink) 60%, transparent);
+  perspective: 300px;
 }
 
-/* The hairline where the two leaves meet — the tell of a real board. */
+/* The hairline hinge across the middle — the tell of a real board. */
 .flap::after {
   content: '';
   position: absolute;
-  inset: 50% 0 auto 0;
+  inset: calc(50% - 1px) 0 auto 0;
   height: 1px;
-  background: color-mix(in srgb, var(--ink) 80%, transparent);
-  z-index: 4;
+  background: color-mix(in srgb, var(--ink) 55%, transparent);
+  pointer-events: none;
 }
 
-.flap-half {
+.flap-face {
+  grid-area: 1 / 1;
+  line-height: 1.1;
+}
+
+.flap-leaf {
+  grid-area: 1 / 1;
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 50%;
+  inset: 0;
   overflow: hidden;
-  display: block;
-  backface-visibility: hidden;
-}
-
-.flap-half > span {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 2em;
-  line-height: 1.15em;
-  text-align: center;
-}
-
-.flap-top {
-  top: 0;
   border-radius: 2px 2px 0 0;
-  background: color-mix(in srgb, var(--paper) 7%, transparent);
-}
-.flap-top > span {
-  top: 0;
-}
-
-.flap-bottom {
-  bottom: 0;
-  border-radius: 0 0 2px 2px;
-  background: color-mix(in srgb, var(--ink) 30%, transparent);
-}
-.flap-bottom > span {
-  top: -1.15em;
-}
-
-.flap-leaf-fall {
-  z-index: 3;
+  height: 50%;
+  background: color-mix(in srgb, var(--paper) 10%, var(--slate));
   transform-origin: bottom center;
-  animation: flap-fall var(--flap-ms, 260ms) cubic-bezier(0.36, 0, 0.66, -0.2) forwards;
+  animation: flap-fold var(--flap-ms, 280ms) cubic-bezier(0.4, 0, 0.7, 0.2) forwards;
+  pointer-events: none;
 }
 
-.flap-leaf-rise {
-  z-index: 2;
-  transform-origin: top center;
-  animation: flap-rise var(--flap-ms, 260ms) cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
+/* The leaf shows the top half of the outgoing character. */
+.flap-leaf-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  height: 200%;
+  line-height: 1.1;
 }
 
-@keyframes flap-fall {
-  0% { transform: rotateX(0deg); }
-  100% { transform: rotateX(-90deg); }
-}
-
-@keyframes flap-rise {
-  0%, 50% { transform: rotateX(90deg); }
-  100% { transform: rotateX(0deg); }
+@keyframes flap-fold {
+  from {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
+  to {
+    transform: rotateX(-88deg);
+    opacity: 0.15;
+  }
 }
 
 /* §8.2/§8.3: reduced motion swaps to a plain value change. */
 @media (prefers-reduced-motion: reduce) {
-  .flap-leaf-fall,
-  .flap-leaf-rise {
-    animation: none;
+  .flap-leaf {
     display: none;
   }
   .tape-cell,
@@ -199,8 +180,8 @@ body {
   transition: background-color 400ms ease-out;
 }
 .wash-up {
-  background-color: color-mix(in srgb, var(--brass) 20%, transparent);
+  background-color: color-mix(in srgb, var(--brass) 16%, transparent);
 }
 .wash-down {
-  background-color: color-mix(in srgb, var(--slate) 85%, var(--loss));
+  background-color: color-mix(in srgb, var(--loss) 14%, transparent);
 }

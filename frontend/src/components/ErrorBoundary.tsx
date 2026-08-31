@@ -35,6 +35,19 @@ export class ErrorBoundary extends Component<Props, State> {
         <p style={{ margin: 0, color: 'var(--loss)' }}>
           The {this.props.name} panel hit an error.
         </p>
+        {/* Show the actual message. The first version hid it, and a chart that
+            died on an unparseable colour token just said "hit an error". */}
+        <p
+          className="num"
+          style={{
+            margin: 'var(--space-2) 0 0',
+            fontSize: '0.75rem',
+            color: 'var(--muted)',
+            wordBreak: 'break-word',
+          }}
+        >
+          {this.state.error.message}
+        </p>
         <p style={{ margin: 'var(--space-2) 0 0' }}>
           The rest of the dashboard is unaffected.{' '}
           <button

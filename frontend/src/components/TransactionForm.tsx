@@ -146,7 +146,13 @@ export function TransactionHistory() {
   const { data } = useTransactions()
   const remove = useDeleteTransaction()
 
-  if (!data || data.transactions.length === 0) return null
+  if (!data || data.transactions.length === 0) {
+    return (
+      <p style={{ color: 'var(--muted)', padding: 'var(--space-4) var(--space-3)', margin: 0, fontSize: '0.85rem' }}>
+        Nothing recorded yet.
+      </p>
+    )
+  }
 
   return (
     <div style={{ overflowX: 'auto' }}>

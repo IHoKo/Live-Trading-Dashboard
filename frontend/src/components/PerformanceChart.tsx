@@ -9,6 +9,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import { money } from '../hooks/usePortfolio'
+import { cssColor, cssToken, withAlpha } from '../lib/cssColor'
 
 /**
  * Portfolio value over time (§10 Phase 4), reconstructed server-side from the
@@ -24,10 +25,6 @@ type Range = (typeof RANGES)[number]
 
 type Point = { date: string; value: number; cost_basis: number; unrealized: number }
 type Performance = { range: string; points: Point[]; unpriced_symbols: string[] }
-
-function token(name: string, fallback: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
-}
 
 export function PerformanceChart() {
   const [range, setRange] = useState<Range>('1Y')
@@ -105,31 +102,31 @@ function ValuePanel({ data }: { data: Performance }) {
       height: 220,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: token('--muted', '#8a8f98'),
-        fontFamily: token('--font-mono', 'monospace'),
+        textColor: cssColor('--muted', '#8a8f98'),
+        fontFamily: cssToken('--font-mono', 'monospace'),
       },
       grid: {
         vertLines: { visible: false },
-        horzLines: { color: token('--rule', '#222') },
+        horzLines: { color: cssColor('--rule', '#222') },
       },
-      rightPriceScale: { borderColor: token('--rule', '#222') },
-      timeScale: { borderColor: token('--rule', '#222') },
+      rightPriceScale: { borderColor: cssColor('--rule', '#222') },
+      timeScale: { borderColor: cssColor('--rule', '#222') },
       crosshair: { mode: 0 },
       handleScale: false,
       handleScroll: false,
     })
 
-    const brass = token('--brass', '#C9A227')
+    const brass = cssColor('--brass', '#C9A227')
     value.current = instance.addAreaSeries({
       lineColor: brass,
-      topColor: `${brass}44`,
-      bottomColor: `${brass}00`,
+      topColor: withAlpha(brass, 0.28),
+      bottomColor: withAlpha(brass, 0),
       lineWidth: 2,
     })
     // Cost basis as a flat reference line — deliberately quiet, so the eye
     // reads the gap rather than the second line.
     basis.current = instance.addLineSeries({
-      color: token('--muted', '#8a8f98'),
+      color: cssColor('--muted', '#8a8f98'),
       lineWidth: 1,
       lineStyle: 2,
       crosshairMarkerVisible: false,
