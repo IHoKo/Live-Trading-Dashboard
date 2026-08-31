@@ -30,12 +30,18 @@ class Health(BaseModel):
 
 @router.get("/health", response_model=Health)
 async def health(request: Request) -> Health:
+    # The *live* provider name, not the static config value. Since Phase 4 this
+    # is a composite ("finnhub+twelvedata"), and reporting the configured name
+    # would hide which combination is actually serving traffic.
+    provider = getattr(request.app.state, "provider", None)
+    name = getattr(provider, "name", None) or get_settings().provider
+
     hub = getattr(request.app.state, "hub", None)
     if hub is None:
         # No market data configured. Still 200 — see the module docstring.
-        return Health(provider=get_settings().provider, market_open=is_market_open())
+        return Health(provider=name, market_open=is_market_open())
     return Health(
-        provider=get_settings().provider,
+        provider=name,
         feed=hub.state.value,
         ws_connected=hub.upstream_connected,
         market_open=is_market_open(),

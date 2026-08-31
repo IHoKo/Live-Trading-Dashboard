@@ -102,3 +102,17 @@ def test_traversal_cannot_escape_the_static_dir(path: str) -> None:
     res = client.get(path)
     assert "[project]" not in res.text
     assert "<title>Ticker</title>" in res.text
+
+
+def test_health_reports_the_live_provider_not_the_configured_name() -> None:
+    """Since Phase 4 the provider is a composite; reporting the static config
+    value would hide which combination is actually serving traffic."""
+
+    class Composite:
+        name = "finnhub+twelvedata"
+
+    app.state.provider = Composite()
+    try:
+        assert client.get("/api/health").json()["provider"] == "finnhub+twelvedata"
+    finally:
+        app.state.provider = None
