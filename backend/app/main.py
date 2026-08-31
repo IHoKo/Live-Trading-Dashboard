@@ -5,26 +5,33 @@ so it must be registered last — after health, after the API router, after the
 asset mount.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import anthropic
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.db.connection import open_database
+from app.deps import require_session
+from app.logging_config import configure as configure_logging
 from app.providers.cache import CachingProvider
 from app.providers.finnhub import FinnhubProvider
-from app.routers import chat, health, portfolio, quotes, ws
+from app.routers import auth, chat, health, portfolio, quotes, ws
+from app.services.auth import SessionManager
+from app.services.backup import backup_loop
 from app.services.pending import PendingActionStore, RateLimiter
 from app.services.price_hub import PriceHub
 
 logger = logging.getLogger("ticker")
 
 settings = get_settings()
+configure_logging(settings.log_level)
 
 # Resolved once at import so the traversal guard in the catch-all compares
 # against an absolute, symlink-free base.
@@ -56,9 +63,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Migrations run here, on every boot, idempotently (§9.4). Never in a Fly
     # release_command: that machine has no volume attached.
     app.state.db = open_database(settings.db_path)
+    # §9.4: the volume has no backups. A snapshot beside the live DB is the
+    # second line, not the first — pull it down with `fly ssh sftp get`.
+    app.state.backup_task = asyncio.create_task(
+        backup_loop(app.state.db, Path(str(settings.db_path)).with_suffix(".backup.db"))
+    )
 
     # Chat state. Pending actions are in memory on purpose: a proposal is a
     # question awaiting an answer, not a fact about the portfolio (§7.2).
+    app.state.sessions = SessionManager(settings.session_secret, settings.app_passphrase)
+    # §11: a passphrase on a public URL is only as good as the guess rate.
+    app.state.login_limiter = RateLimiter(capacity=10, per_seconds=300.0)
+    if not app.state.sessions.configured:
+        logger.warning(
+            "APP_PASSPHRASE / SESSION_SECRET not set — the API is UNAUTHENTICATED. "
+            "Set both with `fly secrets set` before exposing this."
+        )
+
     app.state.pending = PendingActionStore()
     app.state.chat_limiter = RateLimiter()  # §11: 20 messages/hour
     if settings.anthropic_api_key:
@@ -84,6 +105,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Close the feed and the browser sockets before the provider's HTTP client.
     # fly.toml allows 30s for it (kill_signal = SIGTERM, kill_timeout = 30s).
+    task = getattr(app.state, "backup_task", None)
+    if task is not None:
+        task.cancel()
     hub = getattr(app.state, "hub", None)
     if hub is not None:
         await hub.stop()
@@ -113,11 +137,16 @@ app.include_router(health.router)
 # Phase 6 attaches auth here and only here:
 #     api = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 # Quotes, portfolio, transactions, watchlist and chat routers hang off this.
-api = APIRouter(prefix="/api")
+# Phase 6: auth attaches here and only here. /api/health is registered above,
+# outside this router, and stays reachable so the Fly check keeps passing.
+api = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 api.include_router(quotes.router)
 api.include_router(portfolio.router)
 api.include_router(chat.router)
 app.include_router(api)
+
+# Login is on the app, not `api` — you cannot require a session to create one.
+app.include_router(auth.router)
 
 # WebSocket fan-out. Registered before the SPA catch-all, like the API routes.
 app.include_router(ws.router)

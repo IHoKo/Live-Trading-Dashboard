@@ -18,6 +18,7 @@ from collections.abc import Coroutine
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.services.auth import COOKIE_NAME
 from app.services.price_hub import PriceHub
 
 logger = logging.getLogger("ticker.ws")
@@ -49,6 +50,14 @@ async def _keepalive(sink: _WebSocketSink) -> None:
 
 @router.websocket("/ws/prices")
 async def prices(socket: WebSocket) -> None:
+    # The session cookie rides the WS handshake, so the socket is authenticated
+    # the same way the REST routes are. Without this the price feed would be the
+    # one hole in an otherwise closed API (§11).
+    sessions = socket.app.state.sessions
+    if sessions.configured and not sessions.valid(socket.cookies.get(COOKIE_NAME)):
+        await socket.close(code=1008, reason="not authenticated")
+        return
+
     hub: PriceHub | None = getattr(socket.app.state, "hub", None)
     if hub is None:
         # Policy-violation close: market data isn't configured on this instance.

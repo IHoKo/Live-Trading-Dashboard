@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react'
+
 import {
   money,
   percent,
@@ -75,8 +77,13 @@ export function PositionsTable() {
 }
 
 function Row({ position, banded }: { position: Position; banded: boolean }) {
+  // §8.2 restraint: the table only tints. The flip belongs to the tape alone.
+  const wash = useWash(position.last_price)
   return (
-    <tr style={{ background: banded ? 'var(--slate)' : 'transparent' }}>
+    <tr
+      className={`position-row${wash ? ` wash-${wash}` : ''}`}
+      style={{ background: banded && !wash ? 'var(--slate)' : undefined }}
+    >
       <Td align="left" bold>
         {position.symbol}
       </Td>
@@ -94,6 +101,26 @@ function Row({ position, banded }: { position: Position; banded: boolean }) {
       <Td>{position.allocation_pct == null ? '—' : `${position.allocation_pct.toFixed(1)}%`}</Td>
     </tr>
   )
+}
+
+/** 'up' | 'down' briefly after the price moves, then null — a single wash that
+    decays, rather than permanent colour-coded blinking (§8.2). */
+function useWash(price: number | null): 'up' | 'down' | null {
+  const [wash, setWash] = useState<'up' | 'down' | null>(null)
+  const previous = useRef(price)
+
+  useEffect(() => {
+    const before = previous.current
+    previous.current = price
+    if (price == null || before == null || price === before) return
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+
+    setWash(price > before ? 'up' : 'down')
+    const timer = window.setTimeout(() => setWash(null), 400)
+    return () => window.clearTimeout(timer)
+  }, [price])
+
+  return wash
 }
 
 function toneOf(value: number | null | undefined): 'gain' | 'loss' | undefined {

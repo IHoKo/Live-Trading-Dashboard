@@ -78,3 +78,129 @@ body {
   outline: 2px solid var(--brass);
   outline-offset: 2px;
 }
+
+/* ------------------------------------------------------------------
+   Split-flap board — plan.md §8.2's signature element.
+   Each flap is hinged at the middle: the outgoing character's top half
+   falls, then the incoming character's bottom half swings up.
+   ------------------------------------------------------------------ */
+
+.flap-row {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 1px;
+}
+
+.flap-sep {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  align-self: center;
+  padding: 0 1px;
+}
+
+.flap {
+  position: relative;
+  display: inline-block;
+  width: 0.62em;
+  height: 1.15em;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  perspective: 240px;
+  background: color-mix(in srgb, var(--ink) 65%, var(--slate));
+  border-radius: 2px;
+}
+
+/* The hairline where the two leaves meet — the tell of a real board. */
+.flap::after {
+  content: '';
+  position: absolute;
+  inset: 50% 0 auto 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--ink) 80%, transparent);
+  z-index: 4;
+}
+
+.flap-half {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 50%;
+  overflow: hidden;
+  display: block;
+  backface-visibility: hidden;
+}
+
+.flap-half > span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2em;
+  line-height: 1.15em;
+  text-align: center;
+}
+
+.flap-top {
+  top: 0;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--paper) 7%, transparent);
+}
+.flap-top > span {
+  top: 0;
+}
+
+.flap-bottom {
+  bottom: 0;
+  border-radius: 0 0 2px 2px;
+  background: color-mix(in srgb, var(--ink) 30%, transparent);
+}
+.flap-bottom > span {
+  top: -1.15em;
+}
+
+.flap-leaf-fall {
+  z-index: 3;
+  transform-origin: bottom center;
+  animation: flap-fall var(--flap-ms, 260ms) cubic-bezier(0.36, 0, 0.66, -0.2) forwards;
+}
+
+.flap-leaf-rise {
+  z-index: 2;
+  transform-origin: top center;
+  animation: flap-rise var(--flap-ms, 260ms) cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
+}
+
+@keyframes flap-fall {
+  0% { transform: rotateX(0deg); }
+  100% { transform: rotateX(-90deg); }
+}
+
+@keyframes flap-rise {
+  0%, 50% { transform: rotateX(90deg); }
+  100% { transform: rotateX(0deg); }
+}
+
+/* §8.2/§8.3: reduced motion swaps to a plain value change. */
+@media (prefers-reduced-motion: reduce) {
+  .flap-leaf-fall,
+  .flap-leaf-rise {
+    animation: none;
+    display: none;
+  }
+  .tape-cell,
+  .position-row {
+    transition: none !important;
+  }
+}
+
+/* A single 400ms tint wash that decays — brass for up, slate for down.
+   No permanent colour-coded blinking (§8.2). */
+.tape-cell,
+.position-row {
+  transition: background-color 400ms ease-out;
+}
+.wash-up {
+  background-color: color-mix(in srgb, var(--brass) 20%, transparent);
+}
+.wash-down {
+  background-color: color-mix(in srgb, var(--slate) 85%, var(--loss));
+}

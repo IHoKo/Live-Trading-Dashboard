@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { usePriceSocket, useSymbols } from '../hooks/usePriceSocket'
 import { freshness, selectTick, usePriceStore } from '../store/prices'
+import { SplitFlapNumber } from './SplitFlap'
 
 /**
  * The always-on strip from §8.1.
@@ -137,16 +138,14 @@ function TapeCell({ symbol }: { symbol: string }) {
 
   return (
     <div
+      className={`tape-cell${flash ? (up ? ' wash-up' : ' wash-down') : ''}`}
       style={{
         display: 'flex',
         flexDirection: 'column',
         gap: 2,
         padding: 'var(--space-2) var(--space-3)',
         borderRight: '1px solid var(--rule)',
-        minWidth: '8.5rem',
-        // The §8.2 tint wash: brass for up, slate for down, decaying.
-        background: flash ? (up ? 'color-mix(in srgb, var(--brass) 18%, transparent)' : 'color-mix(in srgb, var(--loss) 16%, transparent)') : 'transparent',
-        transition: 'background 400ms ease-out',
+        minWidth: '9rem',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)' }}>
@@ -158,8 +157,12 @@ function TapeCell({ symbol }: { symbol: string }) {
           {fresh.label}
         </span>
       </div>
-      <div className="num" style={{ fontSize: 'var(--step-1)' }}>
-        {tick ? tick.p.toFixed(2) : '––.––'}
+      <div style={{ fontSize: 'var(--step-1)' }}>
+        {/* §8.2: the digits flip. The tape is the only place this happens. */}
+        <SplitFlapNumber
+          value={tick ? tick.p.toFixed(2) : '--.--'}
+          label={tick ? `${symbol} ${tick.p.toFixed(2)}` : `${symbol} no price`}
+        />
       </div>
       <div className="num" style={{ fontSize: '0.7rem', color: changeColor }}>
         {tick?.dp == null ? '—' : `${up ? '▲' : '▼'} ${Math.abs(tick.dp).toFixed(2)}%`}

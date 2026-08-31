@@ -1,7 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useCallback, useEffect, useState } from 'react'
 
 import { Allocation } from './components/Allocation'
 import { Chat } from './components/Chat'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { Login } from './components/Login'
+import { ThemeToggle } from './components/Theme'
 import { PositionsTable } from './components/PositionsTable'
 import { TickerTape } from './components/TickerTape'
 import { TransactionForm, TransactionHistory } from './components/TransactionForm'
@@ -18,6 +22,26 @@ const queryClient = new QueryClient({
 })
 
 export function App() {
+  const [gate, setGate] = useState<'checking' | 'locked' | 'open'>('checking')
+
+  const check = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/session')
+      const body = (await res.json()) as { authenticated: boolean; configured: boolean }
+      // An unconfigured deploy stays usable so you can go and configure it.
+      setGate(body.authenticated || !body.configured ? 'open' : 'locked')
+    } catch {
+      setGate('locked')
+    }
+  }, [])
+
+  useEffect(() => {
+    void check()
+  }, [check])
+
+  if (gate === 'checking') return null
+  if (gate === 'locked') return <Login onSuccess={() => setGate('open')} />
+
   return (
     <QueryClientProvider client={queryClient}>
       <PriceSocketProvider>
@@ -47,11 +71,15 @@ export function App() {
             >
               <div style={{ display: 'grid', gap: 'var(--space-5)', minWidth: 0 }}>
             <Section title="Positions">
-              <PositionsTable />
+              <ErrorBoundary name="positions">
+                <PositionsTable />
+              </ErrorBoundary>
             </Section>
 
             <Section title="Allocation">
-              <Allocation />
+              <ErrorBoundary name="allocation">
+                <Allocation />
+              </ErrorBoundary>
             </Section>
 
             <Section title="Record a transaction">
@@ -63,19 +91,51 @@ export function App() {
             </Section>
               </div>
 
-              <Chat />
+              <ErrorBoundary name="chat">
+                <Chat />
+              </ErrorBoundary>
             </div>
 
             <footer
               style={{
                 marginTop: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--space-3)',
                 color: 'var(--muted)',
                 fontSize: '0.75rem',
                 borderTop: '1px solid var(--rule)',
                 paddingTop: 'var(--space-3)',
               }}
             >
-              Prices may be delayed. Nothing here is investment advice — verify before acting.
+              <span>
+                Prices may be delayed. Nothing here is investment advice — verify before acting.
+              </span>
+              <span style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+                <ThemeToggle />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void fetch('/api/auth/logout', { method: 'POST' }).then(() =>
+                      window.location.reload(),
+                    )
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--rule)',
+                    borderRadius: 3,
+                    color: 'var(--muted)',
+                    font: 'inherit',
+                    fontSize: '0.7rem',
+                    letterSpacing: '0.1em',
+                    padding: '0.25rem 0.5rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  LOG OUT
+                </button>
+              </span>
             </footer>
           </div>
         </main>

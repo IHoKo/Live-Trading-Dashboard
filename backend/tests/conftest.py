@@ -18,3 +18,30 @@ _static = Path(tempfile.mkdtemp(prefix="ticker-static-"))
 os.environ["STATIC_DIR"] = str(_static)
 
 STATIC_DIR = _static
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def app_state():
+    """Stand in for what the lifespan hook sets up.
+
+    Auth is left *unconfigured* by default, so every existing test keeps
+    exercising its own subject rather than the login flow. `test_auth.py`
+    configures it explicitly.
+
+    `require_session` deliberately does not fall back when this is missing:
+    a defensive getattr would let a boot failure silently unauthenticate the
+    app, and that is exactly the bug you never notice.
+    """
+    from app.main import app
+    from app.services.auth import SessionManager
+    from app.services.pending import PendingActionStore, RateLimiter
+
+    app.state.sessions = SessionManager(None, None)
+    app.state.login_limiter = RateLimiter(capacity=10, per_seconds=300.0)
+    app.state.chat_limiter = RateLimiter()
+    app.state.pending = PendingActionStore()
+    app.state.anthropic = None
+    yield

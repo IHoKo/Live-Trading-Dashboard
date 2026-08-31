@@ -273,6 +273,42 @@ closing prices; it now spends a handful per page load and per click.
 - **There is no edit endpoint, deliberately.** `transactions` is append-only; a
   correction is a delete plus a new row. Do not add `PUT /api/transactions/{id}`.
 
+## Auth and ops (Phase 6)
+
+- **Auth is a signed, timestamped cookie, not a session table.** One user, one
+  machine; a server-side store would add a write path and a migration for nothing.
+  `HttpOnly` + `Secure` + `SameSite=Lax`; the last of those is the CSRF protection
+  for every mutating route, so do not relax it.
+- `require_session` is attached to the **`api` router only**. `/api/health` and the
+  SPA catch-all stay public — the health check must never 401 (§9.2), and a
+  logged-out browser must still be served the login page.
+- **The price socket checks the same cookie.** The handshake carries it; without
+  that check the feed would be the one hole in a closed API.
+- With no `APP_PASSPHRASE`/`SESSION_SECRET` the app stays **open** and logs a
+  warning, rather than bricking. A half-configured deploy should be reachable so
+  you can fix it. `require_session` does *not* use a defensive `getattr` for the
+  session manager: a fallback would let a boot failure silently unauthenticate
+  everything.
+- **Logging is configured by us, not uvicorn.** Uvicorn configures only its own
+  loggers, so every `logger.info` in this app was discarded in the container for
+  three phases — the boot migration ran invisibly. `app/logging_config.py` routes
+  everything to stdout as JSON lines.
+- **The nightly backup uses `Connection.backup()`, never a file copy.** With WAL,
+  copying the `.db` without its `-wal` yields a torn database that looks fine
+  until you need it. It writes to `.partial` and renames, so an interrupted run
+  cannot replace a good backup. Same disk, so it is a second line, not an offsite
+  backup: `fly ssh sftp get /data/ticker.backup.db`.
+
+## Testing gotchas worth not rediscovering
+
+- `TestClient(app)` uses `http://`, and httpx correctly refuses to store a
+  `Secure` cookie over plaintext. Auth tests must use
+  `TestClient(app, base_url="https://testserver")` or every one of them fails for
+  the wrong reason.
+- Starlette's `TestClient` does **not** apply its cookie jar to
+  `websocket_connect`. Pass `headers={"Cookie": ...}` by hand. Browsers do send
+  cookies on a same-origin WS handshake, so this is a harness limitation.
+
 ## Other standing details worth not rediscovering
 
 - **Coalesce ticks**: buffer per symbol, flush at most every 250 ms. A liquid symbol prints

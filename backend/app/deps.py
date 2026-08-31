@@ -16,17 +16,28 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 
+from app.services.auth import COOKIE_NAME
+
 if TYPE_CHECKING:
     from app.providers.base import MarketDataProvider
 
 
-async def require_session() -> None:
-    """Placeholder for the Phase 6 session-cookie check.
+def require_session(request: Request) -> None:
+    """Reject anything without a valid session cookie (§11).
 
-    Not wired to any route yet. When it is, it goes on the authenticated API
-    router in `main.py` — never on the health router.
+    Attached to the authenticated API router in `main.py` and to the price
+    socket — never to `/api/health`, and never to the SPA catch-all, which has
+    to serve the login page to a logged-out browser.
+
+    With no passphrase configured the app is left open rather than bricked: a
+    half-configured deploy should still be reachable so you can fix it. It says
+    so loudly at boot.
     """
-    raise NotImplementedError("Auth lands in Phase 6 (plan.md §10).")
+    sessions = request.app.state.sessions
+    if not sessions.configured:
+        return
+    if not sessions.valid(request.cookies.get(COOKIE_NAME)):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
 
 
 def get_provider(request: Request) -> "MarketDataProvider":
