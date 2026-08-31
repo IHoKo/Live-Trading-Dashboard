@@ -436,3 +436,44 @@ async def test_refresh_with_no_symbols_is_a_no_op() -> None:
     hub = make_hub(provider, max_calls_per_min=0)
     assert await hub.refresh() == []
     assert provider.quote_calls == []
+
+
+async def test_a_feed_state_change_is_pushed_to_subscribers() -> None:
+    """Found in production during market hours: the hub flipped polling -> live
+    and never told the browser, so the tape sat on a stale status forever."""
+    hub = make_hub(coalesce_interval=0.01)
+    sink = RecordingSink()
+    hub.add_sink(sink)
+
+    await hub._broadcast_if_changed()
+    first = [m for m in sink.sent if m["type"] == "status"]
+    assert len(first) == 1, "the initial state is announced"
+
+    await hub._broadcast_if_changed()
+    assert len([m for m in sink.sent if m["type"] == "status"]) == 1, "no change, no frame"
+
+    hub.upstream_connected = True
+    hub.state = FeedState.LIVE
+    await hub._broadcast_if_changed()
+
+    statuses = [m for m in sink.sent if m["type"] == "status"]
+    assert len(statuses) == 2
+    assert statuses[-1]["state"] == "live"
+
+
+async def test_the_flush_loop_drives_status_broadcasts() -> None:
+    hub = make_hub(coalesce_interval=0.01)
+    sink = RecordingSink()
+    hub.add_sink(sink)
+
+    task = asyncio.create_task(hub._flush_loop())
+    try:
+        await asyncio.sleep(0.05)
+        hub.upstream_connected = True
+        hub.state = FeedState.LIVE
+        await asyncio.sleep(0.05)
+    finally:
+        hub._running = False
+        task.cancel()
+
+    assert [m["state"] for m in sink.sent if m["type"] == "status"][-1] == "live"

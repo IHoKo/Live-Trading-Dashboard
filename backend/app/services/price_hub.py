@@ -108,6 +108,11 @@ class PriceHub:
         self._last_call_at = 0.0
 
         self.last_refresh_at: float | None = None
+        # Last (state, market_open) pushed to subscribers. The hub changes state
+        # on its own — the upstream socket connecting, the market opening — and
+        # nothing else tells the browser, so a status the client fetched at
+        # connect time would stay stale for the life of the socket.
+        self._last_status: tuple[FeedState, bool] | None = None
         self._refreshing = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
         # One event per waiting loop. A single shared Event would be wrong:
@@ -348,6 +353,7 @@ class PriceHub:
             await asyncio.sleep(self._coalesce_interval)
             try:
                 await self.flush()
+                await self._broadcast_if_changed()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -416,6 +422,18 @@ class PriceHub:
             "market_open": is_market_open(),
             "last_refresh_at": self.last_refresh_at,
         }
+
+    async def _broadcast_if_changed(self) -> None:
+        """Push a status frame when the feed state or market state changes.
+
+        Driven off the flush loop rather than the state setters: it is naturally
+        rate-limited to the coalescing interval, and there is exactly one place
+        that decides subscribers need telling.
+        """
+        signature = (self.state, is_market_open())
+        if signature != self._last_status:
+            self._last_status = signature
+            await self.broadcast_status()
 
     async def broadcast_status(self) -> None:
         payload = self.status_payload()
