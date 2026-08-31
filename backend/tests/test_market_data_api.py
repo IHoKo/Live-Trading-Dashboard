@@ -5,6 +5,7 @@ because the free tier allows 60 calls/minute and a dashboard polling N symbols
 from two tabs blows that budget without them.
 """
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -349,3 +350,90 @@ async def test_candle_cache_size_is_bounded_by_symbols_times_ranges() -> None:
     locks = len(cached._candles._locks)
     assert entries <= len(symbols) * len(ranges), f"{entries} entries after 24h of requests"
     assert locks <= len(symbols) * len(ranges), f"{locks} locks after 24h of requests"
+
+
+# --- TTLCache is bounded by construction, not by convention -----------------
+# The candle leak happened because the cache trusted its callers to pick stable
+# keys. These assert it survives a caller that does not.
+
+
+async def test_expired_entries_are_swept_on_write_not_only_on_read() -> None:
+    """A key nobody revisits is never cleaned by read-time eviction alone —
+    that is exactly the class of key that leaked."""
+    clock = FakeClock()
+    cache = TTLCache(ttl=5.0, clock=clock)
+
+    for i in range(10):
+        await cache.get_or_set(f"never-read-again-{i}", _value(i))
+    assert len(cache) == 10
+
+    clock.advance(6.0)  # everything above is now expired, and nothing rereads it
+    await cache.get_or_set("a-different-key", _value("x"))
+
+    assert len(cache) == 1, "the write should have swept the expired entries"
+
+
+async def test_a_pathological_key_space_stays_bounded() -> None:
+    """Simulates the original bug: a fresh key every call, forever."""
+    cache = TTLCache(ttl=1e9, max_entries=64)
+
+    for i in range(10_000):
+        await cache.get_or_set(("AAPL", "5", i), _value(i))
+
+    assert len(cache) == 64, "the hard cap must hold regardless of key design"
+    assert len(cache._locks) <= 64, "locks must be pruned alongside entries"
+
+
+async def test_eviction_drops_the_oldest_write_first() -> None:
+    cache = TTLCache(ttl=1e9, max_entries=3)
+    for key in ("a", "b", "c"):
+        await cache.get_or_set(key, _value(key))
+
+    await cache.get_or_set("d", _value("d"))
+
+    assert set(cache._entries) == {"b", "c", "d"}, "'a' was the oldest write"
+
+
+async def test_refreshing_a_key_moves_it_to_the_back_of_the_queue() -> None:
+    clock = FakeClock()
+    cache = TTLCache(ttl=1.0, max_entries=3, clock=clock)
+    for key in ("a", "b", "c"):
+        await cache.get_or_set(key, _value(key))
+
+    clock.advance(2.0)  # everything expires
+    await cache.get_or_set("a", _value("a2"))  # 'a' rewritten, others swept
+    for key in ("b", "c", "d"):
+        await cache.get_or_set(key, _value(key))
+
+    assert "a" not in cache._entries, "'a' is now the oldest of the four"
+    assert set(cache._entries) == {"b", "c", "d"}
+
+
+async def test_a_held_lock_is_never_evicted() -> None:
+    """Dropping a lock somebody is waiting on would let a second caller through
+    and defeat the single-flight guard."""
+    cache = TTLCache(ttl=1e9, max_entries=1)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow() -> str:
+        started.set()
+        await release.wait()
+        return "slow"
+
+    task = asyncio.create_task(cache.get_or_set("held", slow))
+    await started.wait()
+
+    for i in range(50):  # push far past the cap while "held" is in flight
+        await cache.get_or_set(f"filler-{i}", _value(i))
+
+    assert "held" in cache._locks, "the in-flight lock survived eviction"
+    release.set()
+    assert await task == "slow"
+
+
+def _value(v: Any) -> Any:
+    async def factory() -> Any:
+        return v
+
+    return factory

@@ -22,26 +22,68 @@ from app.providers.base import (
     Trade,
 )
 
+# A cache this size is already far larger than the app can use: quotes are keyed
+# by symbol, candles by (symbol, resolution, window length). It exists so that a
+# future key-design mistake costs a cache miss instead of the machine.
+DEFAULT_MAX_ENTRIES = 512
+
 
 class TTLCache:
-    """Single-process TTL cache with per-key locking.
+    """Single-process TTL cache with per-key locking and a hard size bound.
 
     The lock matters as much as the TTL: without it, N concurrent misses on the
     same key all hit upstream, which is exactly the burst the cache exists to
     prevent. Single-process is correct here because the app is pinned to one
     machine (CLAUDE.md, plan.md §2).
+
+    Two independent guarantees keep this bounded, because relying on either
+    alone is how the candle cache leaked:
+
+    * **Sweep on write.** Expired entries are cleared whenever anything is
+      stored, not only when their own key is read again. Reading is not enough:
+      a key nobody revisits is never cleaned, and it was exactly that class of
+      key — one carrying a moving timestamp — that grew without limit.
+    * **Hard cap.** Past `max_entries` the oldest write is dropped. Even if a
+      caller invents an unbounded key space, memory stays flat and the only
+      cost is a lower hit rate.
+
+    `_locks` is pruned in lockstep with `_entries`; on its own it had no
+    eviction path at all.
     """
 
-    def __init__(self, ttl: float, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        ttl: float,
+        *,
+        max_entries: int = DEFAULT_MAX_ENTRIES,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._ttl = ttl
+        self._max_entries = max_entries
         self._clock = clock
-        # Entries are evicted lazily, when an expired key is read again. That
-        # is only safe because every key here is *stable* — symbol for quotes,
-        # (symbol, resolution, window length) for candles — so a key is always
-        # revisited and cleaned. Put anything clock-derived in a cache key and
-        # this dict grows for the life of the process; see CachingProvider.candles.
+        # Insertion-ordered: the first key is the oldest write, which is what
+        # eviction drops.
         self._entries: dict[Any, tuple[float, Any]] = {}
         self._locks: dict[Any, asyncio.Lock] = {}
+
+    # --- internals ----------------------------------------------------------
+
+    def _drop(self, key: Any) -> None:
+        self._entries.pop(key, None)
+        lock = self._locks.get(key)
+        # Never discard a lock somebody is holding or waiting on — a fresh lock
+        # would let a second caller through and defeat the single-flight guard.
+        if lock is not None and not lock.locked():
+            del self._locks[key]
+
+    def _sweep(self) -> None:
+        now = self._clock()
+        for key in [k for k, (expires_at, _) in self._entries.items() if now >= expires_at]:
+            self._drop(key)
+
+    def _enforce_cap(self) -> None:
+        while len(self._entries) > self._max_entries:
+            self._drop(next(iter(self._entries)))
 
     def _live(self, key: Any) -> tuple[bool, Any]:
         entry = self._entries.get(key)
@@ -49,9 +91,19 @@ class TTLCache:
             return False, None
         expires_at, value = entry
         if self._clock() >= expires_at:
-            self._entries.pop(key, None)
+            self._drop(key)
             return False, None
         return True, value
+
+    def _store(self, key: Any, value: Any) -> None:
+        self._sweep()
+        # Re-insert rather than assign, so a refreshed key moves to the back of
+        # the queue and eviction stays oldest-write-first.
+        self._entries.pop(key, None)
+        self._entries[key] = (self._clock() + self._ttl, value)
+        self._enforce_cap()
+
+    # --- api ----------------------------------------------------------------
 
     async def get_or_set(self, key: Any, factory: Callable[[], Awaitable[Any]]) -> Any:
         hit, value = self._live(key)
@@ -65,11 +117,15 @@ class TTLCache:
             if hit:
                 return value
             value = await factory()
-            self._entries[key] = (self._clock() + self._ttl, value)
+            self._store(key, value)
             return value
 
     def invalidate(self) -> None:
         self._entries.clear()
+        self._locks = {k: v for k, v in self._locks.items() if v.locked()}
+
+    def __len__(self) -> int:
+        return len(self._entries)
 
 
 class CachingProvider(MarketDataProvider):
