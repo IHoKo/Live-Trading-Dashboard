@@ -217,11 +217,20 @@ Re-verify before changing the chat call; this drifts faster than the rest of the
 
 **Finnhub's free tier does not include `/stock/candle`.** Confirmed in production
 2026-08-30: the same key that serves `/quote` and `/search` gets **HTTP 403** on
-candles. §4 recommends Finnhub for v1 and §3 assumes it covers charts; it does not.
-Phase 4 therefore needs a decision — pay for a Finnhub tier, or serve candles from a
-second provider behind the same `MarketDataProvider` interface while quotes stay on
-Finnhub. `/api/candles` surfaces this as a 502 with an actionable message rather
-than a generic error. Do not assume charts "just work" when you get to Phase 4.
+candles.
+
+**Resolved in Phase 4 by splitting providers, not by paying.** `CompositeProvider`
+routes quotes, search and the trade stream to Finnhub, and candles to Twelve Data
+(free tier: 800 credits/day, 8/min, full daily history — versus Alpha Vantage's
+25 requests/day, which six range buttons would exhaust before lunch). This is the
+one-file swap §4's interface was designed for.
+
+- Charts and portfolio history need `TWELVEDATA_API_KEY`. Without it everything
+  else still works and `/api/candles` returns a 502 naming the fix.
+- Paying for a Finnhub tier remains a valid alternative and needs no code change —
+  point `CompositeProvider(candles_from=...)` back at the Finnhub instance.
+- Verify both providers' terms before relying on them. §4 said free tiers change
+  quietly and it was right about Finnhub.
 
 **Polling cannot literally be "every 15s for the whole watchlist" (§4 rung 2).**
 The free tier allows 60 calls/minute, so N symbols every 15s breaks the limit at

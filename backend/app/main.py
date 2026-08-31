@@ -21,7 +21,9 @@ from app.db.connection import open_database
 from app.deps import require_session
 from app.logging_config import configure as configure_logging
 from app.providers.cache import CachingProvider
+from app.providers.composite import CompositeProvider
 from app.providers.finnhub import FinnhubProvider
+from app.providers.twelvedata import TwelveDataProvider
 from app.routers import auth, chat, health, portfolio, quotes, ws
 from app.services.auth import SessionManager
 from app.services.backup import backup_loop
@@ -89,7 +91,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("ANTHROPIC_API_KEY is unset — /api/chat/* will return 503.")
 
     if settings.finnhub_api_key:
-        app.state.provider = CachingProvider(FinnhubProvider(settings.finnhub_api_key))
+        # Quotes, search and the trade stream from Finnhub; candles from a
+        # second provider, because Finnhub's free tier 403s on /stock/candle.
+        candles_provider = (
+            TwelveDataProvider(settings.twelvedata_api_key) if settings.twelvedata_api_key else None
+        )
+        if candles_provider is None:
+            logger.warning(
+                "TWELVEDATA_API_KEY is unset — charts and portfolio history will be "
+                "unavailable. Finnhub's free tier does not serve /stock/candle."
+            )
+        app.state.provider = CachingProvider(
+            CompositeProvider(
+                FinnhubProvider(settings.finnhub_api_key), candles_from=candles_provider
+            )
+        )
         # One hub for the process: one upstream connection, one cache (§2).
         app.state.hub = PriceHub(app.state.provider)
         await app.state.hub.start()

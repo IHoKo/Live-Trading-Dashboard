@@ -2,12 +2,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useCallback, useEffect, useState } from 'react'
 
 import { Allocation } from './components/Allocation'
+import { Chart } from './components/Chart'
 import { Chat } from './components/Chat'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Login } from './components/Login'
 import { ThemeToggle } from './components/Theme'
+import { PerformanceChart } from './components/PerformanceChart'
 import { PositionsTable } from './components/PositionsTable'
-import { TickerTape } from './components/TickerTape'
+import { DEFAULT_WATCHLIST, TickerTape } from './components/TickerTape'
 import { TransactionForm, TransactionHistory } from './components/TransactionForm'
 import { PriceSocketProvider } from './hooks/usePriceSocket'
 import { money, usePortfolio } from './hooks/usePortfolio'
@@ -73,6 +75,18 @@ export function App() {
             <Section title="Positions">
               <ErrorBoundary name="positions">
                 <PositionsTable />
+              </ErrorBoundary>
+            </Section>
+
+            <Section title="Portfolio value">
+              <ErrorBoundary name="performance">
+                <PerformanceChart />
+              </ErrorBoundary>
+            </Section>
+
+            <Section title="Chart">
+              <ErrorBoundary name="chart">
+                <SymbolChart />
               </ErrorBoundary>
             </Section>
 
@@ -181,6 +195,14 @@ function PortfolioValue() {
       </p>
     </header>
   )
+}
+
+/** §8.1: the chart follows the selected symbol. Until there is a selection UI,
+    it follows the first holding, falling back to the tape's lead symbol. */
+function SymbolChart() {
+  const { data } = usePortfolio()
+  const symbol = data?.positions[0]?.symbol ?? DEFAULT_WATCHLIST[0]
+  return <Chart symbol={symbol} />
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

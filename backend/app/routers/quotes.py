@@ -16,8 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from app.deps import get_provider
+from app.errors import raise_for_provider_error
 from app.providers.base import (
-    AccessDenied,
     Candle,
     MarketDataProvider,
     ProviderError,
@@ -125,24 +125,8 @@ def candle_window(range_: ChartRange, now: int | None = None) -> tuple[Resolutio
 
 
 def _raise_for_provider_error(exc: ProviderError) -> None:
-    """Translate provider failures into honest status codes.
-
-    AccessDenied in particular must not surface as a generic 500: on Finnhub's
-    free tier it most often means the endpoint is on a paid plan, and that is
-    something the operator can act on.
-    """
-    if isinstance(exc, SymbolNotFound):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, RateLimited):
-        headers = {"Retry-After": str(int(exc.retry_after))} if exc.retry_after else None
-        raise HTTPException(
-            status_code=429,
-            detail="Upstream market data rate limit reached. Try again shortly.",
-            headers=headers,
-        ) from exc
-    if isinstance(exc, AccessDenied):
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    raise HTTPException(status_code=502, detail=str(exc)) from exc
+    """Kept as a local alias so existing call sites read unchanged."""
+    raise_for_provider_error(exc)
 
 
 @router.get("/quotes", response_model=QuotesResponse)

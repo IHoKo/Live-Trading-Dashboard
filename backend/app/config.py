@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # loop takes the health check down with it (plan.md §9.3).
     anthropic_api_key: str | None = None
     finnhub_api_key: str | None = None
+    # Historical bars only. Finnhub's free tier 403s on /stock/candle, so
+    # candles come from a second provider (plan.md §4, CLAUDE.md).
+    twelvedata_api_key: str | None = None
     session_secret: str | None = None
     app_passphrase: str | None = None
 

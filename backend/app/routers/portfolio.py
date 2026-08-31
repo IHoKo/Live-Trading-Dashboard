@@ -14,6 +14,7 @@ function the tests can drive directly.
 
 import asyncio
 import sqlite3
+import time
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -21,12 +22,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from app.deps import get_db, get_provider_optional
+from app.errors import raise_for_provider_error
 from app.providers.base import MarketDataProvider, ProviderError
+from app.services import performance
 from app.services import portfolio as engine
 
 router = APIRouter(tags=["portfolio"])
 
 MAX_PAGE_SIZE = 200
+
+PerformanceRange = Literal["1M", "6M", "1Y", "5Y", "ALL"]
+
+_DAY = 60 * 60 * 24
+_PERFORMANCE_LOOKBACK: dict[str, int] = {
+    "1M": 31 * _DAY,
+    "6M": 183 * _DAY,
+    "1Y": 366 * _DAY,
+    "5Y": 1827 * _DAY,
+}
 
 
 class TransactionIn(BaseModel):
@@ -81,6 +94,21 @@ class PositionOut(BaseModel):
     unrealized_pct: float | None = None
     day_change_pct: float | None = None
     allocation_pct: float | None = None
+
+
+class PerformancePointOut(BaseModel):
+    date: str
+    value: float
+    cost_basis: float
+    unrealized: float
+
+
+class PerformanceOut(BaseModel):
+    range: str
+    points: list[PerformancePointOut]
+    # Symbols with no historical data. Reported rather than silently dropped:
+    # a chart missing a holding is worse than a chart that says so.
+    unpriced_symbols: list[str]
 
 
 class PortfolioOut(BaseModel):
@@ -159,6 +187,38 @@ async def get_portfolio(
         realized_pnl_total=realized,
         priced_symbols=len(prices),
         unpriced_symbols=[p.symbol for p in held if p.symbol not in prices],
+    )
+
+
+@router.get("/portfolio/performance", response_model=PerformanceOut)
+async def get_performance(
+    db: Annotated[sqlite3.Connection, Depends(get_db)],
+    provider: Annotated[MarketDataProvider | None, Depends(get_provider_optional)],
+    range: Annotated[PerformanceRange, Query(description="1M/6M/1Y/5Y/ALL")] = "1Y",
+) -> PerformanceOut:
+    """Portfolio value over time, reconstructed from transactions + closes (§6)."""
+    if provider is None:
+        raise HTTPException(
+            status_code=503, detail="Market data is unavailable, so history cannot be rebuilt."
+        )
+
+    now = int(time.time())
+    frm = 0 if range == "ALL" else now - _PERFORMANCE_LOOKBACK[range]
+    try:
+        points, unpriced = await performance.portfolio_performance(db, provider, frm=frm, to=now)
+    except ProviderError as exc:
+        raise_for_provider_error(exc)
+        raise  # unreachable
+
+    return PerformanceOut(
+        range=range,
+        points=[
+            PerformancePointOut(
+                date=p.date, value=p.value, cost_basis=p.cost_basis, unrealized=p.unrealized
+            )
+            for p in points
+        ],
+        unpriced_symbols=unpriced,
     )
 
 
