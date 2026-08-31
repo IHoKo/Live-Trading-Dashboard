@@ -74,7 +74,9 @@ def test_spa_deep_link_answers_head() -> None:
     assert client.head("/portfolio").status_code == 200
 
 
-@pytest.mark.parametrize("path", ["/api/nope", "/api/portfolio", "/ws/prices"])
+# Paths chosen to stay absent as the API grows — this test has already been
+# broken twice by a phase implementing the endpoint it used as a stand-in.
+@pytest.mark.parametrize("path", ["/api/nope", "/api/not-a-real-endpoint", "/ws/nope"])
 def test_unmatched_api_and_ws_paths_are_404_not_the_shell(path: str) -> None:
     """A typo'd endpoint must not return HTML with a 200."""
     res = client.get(path)

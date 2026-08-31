@@ -234,6 +234,30 @@ Markets are closed roughly 75% of the week, and this is a single-user app on a
 60 calls/min free tier. The old behaviour spent ~9,000 calls/day re-reading static
 closing prices; it now spends a handful per page load and per click.
 
+## Database decisions (Phase 3)
+
+§3 allows "Alembic (or plain versioned `.sql` files)". The choice made was:
+
+- **Plain versioned `.sql` migrations** in `app/db/migrations/`, applied in filename
+  order at boot and recorded in `schema_migrations`. Do not add Alembic — the
+  `alembic` dependency in `pyproject.toml` is now unused and can go.
+- Every migration is written idempotent (`CREATE TABLE IF NOT EXISTS`) because it
+  runs on every boot, forever (§9.4).
+- `migrate()` deliberately does **not** wrap `executescript` in a transaction:
+  `sqlite3.executescript` issues an implicit COMMIT before running, which tears
+  down the surrounding transaction and then fails on the way out. Idempotent DDL
+  plus recording the filename only after success makes a retry safe.
+- **The lot engine is synchronous.** Callers wrap a unit of work in
+  `asyncio.to_thread`: one thread hop per operation, and the engine stays a plain
+  function the tests can drive directly. That testability is the point — §11 asks
+  for this to be tested harder than anything else in the app.
+- One process-wide connection, WAL, `foreign_keys=ON`, `busy_timeout=5000`. One
+  machine, one writer.
+- Deleting a transaction clears the derived tables **before** deleting the row,
+  because `lots.tx_id` and `realized_pnl.sell_tx_id` are real foreign keys.
+- **There is no edit endpoint, deliberately.** `transactions` is append-only; a
+  correction is a delete plus a new row. Do not add `PUT /api/transactions/{id}`.
+
 ## Other standing details worth not rediscovering
 
 - **Coalesce ticks**: buffer per symbol, flush at most every 250 ms. A liquid symbol prints

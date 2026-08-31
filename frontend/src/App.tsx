@@ -1,121 +1,130 @@
-import { useEffect, useState } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
+import { Allocation } from './components/Allocation'
+import { PositionsTable } from './components/PositionsTable'
 import { TickerTape } from './components/TickerTape'
+import { TransactionForm, TransactionHistory } from './components/TransactionForm'
 import { PriceSocketProvider } from './hooks/usePriceSocket'
-import { usePriceStore } from './store/prices'
-
-type Health = {
-  status: 'ok'
-  provider: string
-  feed: 'not_started' | 'live' | 'polling' | 'down'
-  ws_connected: boolean
-  market_open: boolean | null
-  subscribed_symbols: number
-}
+import { money, usePortfolio } from './hooks/usePortfolio'
 
 /**
- * Phase 2 shell: the always-on tape from §8.1 plus a feed panel.
- * Portfolio, chart and chat are Phases 3-5; the §8.2 design pass is Phase 6.
+ * Phase 3 shell: tape, portfolio value, positions, allocation, add/remove.
+ * Chart is Phase 4 and chat is Phase 5, so the §8.1 right-hand column is not
+ * built yet. The §8.2 design pass is Phase 6.
  */
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
+})
+
 export function App() {
   return (
-    <PriceSocketProvider>
-      <main style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
-        <TickerTape />
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-4)',
-            padding: 'var(--space-5)',
-          }}
-        >
-          <header>
-            <h1
-              style={{
-                fontFamily: 'var(--font-display)',
-                fontSize: 'var(--step-3)',
-                letterSpacing: '-0.03em',
-                margin: 0,
-              }}
-            >
-              TICKER
-            </h1>
-            <p style={{ color: 'var(--muted)', margin: 'var(--space-1) 0 0' }}>
-              Phase 2 — live prices
-            </p>
-          </header>
-
-          <FeedPanel />
-
-          <footer
+    <QueryClientProvider client={queryClient}>
+      <PriceSocketProvider>
+        <main style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
+          <TickerTape />
+          <div
             style={{
-              marginTop: 'auto',
-              color: 'var(--muted)',
-              fontSize: '0.75rem',
-              borderTop: '1px solid var(--rule)',
-              paddingTop: 'var(--space-3)',
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-5)',
+              padding: 'var(--space-5)',
+              maxWidth: '72rem',
+              width: '100%',
             }}
           >
-            Prices may be delayed. Nothing here is investment advice — verify before acting.
-          </footer>
-        </div>
-      </main>
-    </PriceSocketProvider>
+            <PortfolioValue />
+
+            <Section title="Positions">
+              <PositionsTable />
+            </Section>
+
+            <Section title="Allocation">
+              <Allocation />
+            </Section>
+
+            <Section title="Record a transaction">
+              <TransactionForm />
+            </Section>
+
+            <Section title="History">
+              <TransactionHistory />
+            </Section>
+
+            <footer
+              style={{
+                marginTop: 'auto',
+                color: 'var(--muted)',
+                fontSize: '0.75rem',
+                borderTop: '1px solid var(--rule)',
+                paddingTop: 'var(--space-3)',
+              }}
+            >
+              Prices may be delayed. Nothing here is investment advice — verify before acting.
+            </footer>
+          </div>
+        </main>
+      </PriceSocketProvider>
+    </QueryClientProvider>
   )
 }
 
-function FeedPanel() {
-  const status = usePriceStore((s) => s.status)
-  const connection = usePriceStore((s) => s.connection)
-  const tickCount = usePriceStore((s) => Object.keys(s.ticks).length)
-  const [health, setHealth] = useState<Health | null>(null)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    fetch('/api/health', { signal: controller.signal })
-      .then((res) => (res.ok ? (res.json() as Promise<Health>) : Promise.reject(res.status)))
-      .then(setHealth)
-      .catch(() => undefined)
-    return () => controller.abort()
-  }, [])
-
-  const rows: [string, string][] = [
-    ['socket', connection],
-    ['feed', status?.state ?? '—'],
-    ['market', status ? (status.market_open ? 'open' : 'closed') : '—'],
-    ['provider', status?.provider ?? health?.provider ?? '—'],
-    ['symbols priced', String(tickCount)],
-  ]
+function PortfolioValue() {
+  const { data } = usePortfolio()
+  const total = data?.market_value_total ?? data?.cost_basis_total ?? null
+  const pnl = data?.unrealized_pnl_total ?? null
+  const tone = pnl == null || pnl === 0 ? 'var(--paper)' : pnl > 0 ? 'var(--gain)' : 'var(--loss)'
 
   return (
-    <section
-      style={{
-        background: 'var(--slate)',
-        border: '1px solid var(--rule)',
-        borderRadius: 6,
-        padding: 'var(--space-3)',
-        maxWidth: '32rem',
-      }}
-    >
-      <dl
+    <header>
+      <p
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'auto 1fr',
-          gap: 'var(--space-2) var(--space-3)',
+          color: 'var(--muted)',
           margin: 0,
+          fontSize: '0.7rem',
+          letterSpacing: '0.12em',
         }}
       >
-        {rows.map(([label, value]) => (
-          <div key={label} style={{ display: 'contents' }}>
-            <dt style={{ color: 'var(--muted)' }}>{label}</dt>
-            <dd className="num" style={{ margin: 0 }}>
-              {value}
-            </dd>
-          </div>
-        ))}
-      </dl>
+        {data?.market_value_total == null ? 'PORTFOLIO COST BASIS' : 'PORTFOLIO VALUE'}
+      </p>
+      {/* aria-live on the total only — announcing every tick would flood a
+          screen reader (§8.3). */}
+      <p
+        aria-live="polite"
+        className="num"
+        style={{
+          fontFamily: 'var(--font-display)',
+          fontSize: 'var(--step-3)',
+          letterSpacing: '-0.02em',
+          margin: 'var(--space-1) 0 0',
+        }}
+      >
+        {money(total)}
+      </p>
+      <p className="num" style={{ color: tone, margin: 'var(--space-1) 0 0' }}>
+        {pnl == null ? 'Unrealized P/L unavailable' : `${pnl >= 0 ? '▲' : '▼'} ${money(Math.abs(pnl))} unrealized`}
+      </p>
+    </header>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section style={{ display: 'grid', gap: 'var(--space-3)' }}>
+      <h2
+        style={{
+          margin: 0,
+          fontSize: '0.7rem',
+          letterSpacing: '0.12em',
+          color: 'var(--muted)',
+          fontWeight: 500,
+          borderBottom: '1px solid var(--rule)',
+          paddingBottom: 'var(--space-2)',
+        }}
+      >
+        {title.toUpperCase()}
+      </h2>
+      {children}
     </section>
   )
 }

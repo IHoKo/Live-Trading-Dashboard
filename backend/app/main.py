@@ -14,9 +14,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.db.connection import open_database
 from app.providers.cache import CachingProvider
 from app.providers.finnhub import FinnhubProvider
-from app.routers import health, quotes, ws
+from app.routers import health, portfolio, quotes, ws
 from app.services.price_hub import PriceHub
 
 logger = logging.getLogger("ticker")
@@ -50,6 +51,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # One provider, one HTTP client, shared by every request — so the connection
     # pool and the response cache are shared too. A per-request client would
     # defeat both and burn the free tier's 60 calls/minute.
+    # Migrations run here, on every boot, idempotently (§9.4). Never in a Fly
+    # release_command: that machine has no volume attached.
+    app.state.db = open_database(settings.db_path)
+
     if settings.finnhub_api_key:
         app.state.provider = CachingProvider(FinnhubProvider(settings.finnhub_api_key))
         # One hub for the process: one upstream connection, one cache (§2).
@@ -73,6 +78,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider = getattr(app.state, "provider", None)
     if provider is not None:
         await provider.aclose()
+    db = getattr(app.state, "db", None)
+    if db is not None:
+        db.close()
 
 
 app = FastAPI(
@@ -92,6 +100,7 @@ app.include_router(health.router)
 # Quotes, portfolio, transactions, watchlist and chat routers hang off this.
 api = APIRouter(prefix="/api")
 api.include_router(quotes.router)
+api.include_router(portfolio.router)
 app.include_router(api)
 
 # WebSocket fan-out. Registered before the SPA catch-all, like the API routes.

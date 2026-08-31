@@ -11,6 +11,7 @@ looks nothing like the cause — while the app itself is running fine
 (plan.md §9.2, §9.4).
 """
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
@@ -43,3 +44,25 @@ def get_provider(request: Request) -> "MarketDataProvider":
             detail="Market data is unavailable: FINNHUB_API_KEY is not configured.",
         )
     return provider
+
+
+def get_db(request: Request) -> sqlite3.Connection:
+    """The process-wide SQLite connection, opened and migrated at boot.
+
+    One connection is right here: one machine, one writer, WAL enabled, and
+    every unit of work already serialised through `asyncio.to_thread`.
+    """
+    conn = getattr(request.app.state, "db", None)
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Database is not available.")
+    return conn
+
+
+def get_provider_optional(request: Request) -> "MarketDataProvider | None":
+    """Like `get_provider`, but returns None instead of 503.
+
+    The portfolio is meaningful without live prices — cost basis and realized
+    P/L are ours, not the provider's — so a missing key or a dead upstream
+    should degrade the view, not refuse it.
+    """
+    return getattr(request.app.state, "provider", None)
