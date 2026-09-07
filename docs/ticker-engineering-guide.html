@@ -1,0 +1,839 @@
+<title>Ticker Engineering Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ink:#0E1116; --paper:#F5F2EC; --brass:#8A6E15; --gain:#2F7D6E; --loss:#A8442F;
+    --ground:#FFFFFF; --surface:#FAF8F3; --band:#F1EDE3; --text:#0E1116;
+    --muted:#585B58; --rule:#D9D3C4; --rail:#B9B2A0;
+    --display:'Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif;
+    --body:'Instrument Sans',ui-sans-serif,system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --measure:68ch; color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --brass:#C9A227; --ground:#0E1116; --surface:#151A21; --band:#12171E;
+      --text:#F5F2EC; --muted:#9096A0; --rule:#272E38; --rail:#39424E; color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --brass:#C9A227; --ground:#0E1116; --surface:#151A21; --band:#12171E;
+    --text:#F5F2EC; --muted:#9096A0; --rule:#272E38; --rail:#39424E; color-scheme:dark;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--text);font-family:var(--body);
+       font-size:16px;line-height:1.6;margin:0;
+       padding:clamp(1.4rem,4vw,3.5rem) clamp(1rem,5vw,3rem) 4rem;-webkit-font-smoothing:antialiased}
+  .page{max-width:66rem;margin:0 auto}
+  .col{max-width:var(--measure)}
+
+  .masthead{border-bottom:2px solid var(--text);padding-bottom:1.3rem}
+  .kicker{font-family:var(--mono);font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;
+          color:var(--brass);margin:0 0 .5rem}
+  h1{font-family:var(--display);font-weight:700;font-size:clamp(2.4rem,6vw,3.8rem);
+     letter-spacing:-.035em;line-height:.96;margin:0;text-wrap:balance}
+  .standfirst{font-size:clamp(1rem,2vw,1.12rem);color:var(--muted);margin:.8rem 0 0;max-width:var(--measure)}
+  .meta{display:flex;flex-wrap:wrap;gap:.45rem 1.5rem;margin-top:1.2rem;font-family:var(--mono);
+        font-size:.7rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+        font-variant-numeric:tabular-nums}
+  .meta b{color:var(--text);font-weight:500}
+
+  section{margin-top:3rem}
+  .eyebrow{font-family:var(--mono);font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;
+           color:var(--brass);margin:0 0 .45rem}
+  h2{font-family:var(--display);font-weight:600;font-size:clamp(1.4rem,3.2vw,1.85rem);
+     letter-spacing:-.02em;line-height:1.15;margin:0 0 .8rem;text-wrap:balance}
+  h3{font-family:var(--display);font-weight:600;font-size:1.02rem;letter-spacing:-.01em;margin:0}
+  p{margin:0 0 .9rem}p:last-child{margin-bottom:0}
+  strong{font-weight:600}
+  code{font-family:var(--mono);font-size:.85em;background:var(--band);padding:.06em .32em;border-radius:2px}
+
+  /* --- at a glance ---------------------------------------------------- */
+  .glance{display:grid;gap:.7rem;grid-template-columns:repeat(3,minmax(0,1fr));margin-top:1.3rem}
+  @media (max-width:44rem){.glance{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .gcard{border:1px solid var(--rule);border-top:3px solid var(--rail);border-radius:3px;
+         background:var(--surface);padding:.85rem .95rem;display:grid;gap:.2rem}
+  .gcard .k{font-family:var(--mono);font-size:.62rem;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
+  .gcard .v{font-family:var(--display);font-weight:600;font-size:1.02rem;line-height:1.25}
+  .gcard .d{font-size:.8rem;color:var(--muted);line-height:1.45}
+
+  /* --- figures -------------------------------------------------------- */
+  figure{margin:1.5rem 0 0;padding:0}
+  figure svg{display:block;width:100%;height:auto;color:var(--text)}
+  figcaption{margin-top:.7rem;font-size:.84rem;color:var(--muted);max-width:var(--measure)}
+  figcaption b{color:var(--text);font-weight:600}
+
+  /* diagram node vocabulary — one encoding used across all three figures */
+  .n-lane{fill:var(--band);stroke:none}
+  .n-lane-b{fill:none;stroke:var(--rule);stroke-width:1}
+  .lane-t{font-family:var(--mono);font-size:12px;letter-spacing:.14em;fill:var(--muted)}
+  .n-ext{fill:var(--surface);stroke:var(--rail);stroke-width:1.5;stroke-dasharray:5 3}
+  .n-proc{fill:var(--surface);stroke:var(--text);stroke-width:1.5}
+  .n-data{fill:var(--surface);stroke:var(--text);stroke-width:1.5}
+  .n-ui{fill:var(--surface);stroke:var(--brass);stroke-width:2}
+  .n-dec{fill:var(--surface);stroke:var(--text);stroke-width:1.5}
+  .n-t{font-family:var(--body);font-size:15px;font-weight:600;fill:var(--text)}
+  .n-s{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}
+  .edge{fill:none;stroke:var(--text);stroke-width:1.6;opacity:.75}
+  .edge-a{fill:none;stroke:var(--brass);stroke-width:2.4}
+  .edge-d{fill:none;stroke:var(--text);stroke-width:1.6;stroke-dasharray:5 4;opacity:.55}
+  .e-t{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}
+  .e-ta{font-family:var(--mono);font-size:11.5px;fill:var(--brass);font-weight:500}
+  .badge{fill:var(--brass)}
+  .badge-t{font-family:var(--mono);font-size:12px;font-weight:600;fill:var(--ground)}
+  .legend-t{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}
+
+  /* --- stage table ---------------------------------------------------- */
+  .stages{display:grid;gap:0;margin-top:1.4rem;border-top:1px solid var(--rule)}
+  .stage-row{display:grid;grid-template-columns:2.2rem 1fr;gap:.9rem;padding:.95rem 0;
+             border-bottom:1px solid var(--rule);break-inside:avoid}
+  .stage-n{font-family:var(--mono);font-size:.78rem;color:var(--brass);font-weight:600;padding-top:.15rem}
+  .stage-b{display:grid;gap:.45rem;min-width:0}
+  .stage-h{font-family:var(--display);font-weight:600;font-size:1rem}
+  .stage-g{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.5rem .9rem}
+  .kv{display:grid;gap:.05rem;min-width:0}
+  .kv dt{font-family:var(--mono);font-size:.62rem;letter-spacing:.11em;text-transform:uppercase;color:var(--muted)}
+  .kv dd{margin:0;font-size:.84rem;line-height:1.45;overflow-wrap:anywhere}
+  .kv dd code{background:none;padding:0;color:var(--text)}
+
+  /* --- service cards -------------------------------------------------- */
+  .services{display:grid;gap:1rem;margin-top:1.4rem}
+  .service{border:1px solid var(--rule);border-left:3px solid var(--brass);border-radius:3px;
+           background:var(--surface);padding:1.05rem 1.2rem;break-inside:avoid}
+  .service header{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;
+                  flex-wrap:wrap;margin-bottom:.6rem}
+  .tag{font-family:var(--mono);font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;
+       color:var(--muted);white-space:nowrap}
+  .tag--free{color:var(--gain)}.tag--paid{color:var(--brass)}
+  .qa{display:grid;gap:.55rem}
+  .qa>div{display:grid;grid-template-columns:7rem 1fr;gap:.85rem}
+  .qa dt{font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;
+         color:var(--muted);padding-top:.18rem}
+  .qa dd{margin:0;font-size:.9rem;line-height:1.5}
+  @media (max-width:34rem){.qa>div{grid-template-columns:1fr;gap:.1rem}}
+
+  .rules{display:grid;gap:1rem;margin-top:1.3rem;padding:0;list-style:none}
+  .rules li{border-top:1px solid var(--rule);padding-top:.8rem;max-width:var(--measure);break-inside:avoid}
+  .rules .head{font-family:var(--display);font-weight:600;margin-bottom:.22rem}
+  .rules .body{color:var(--muted);font-size:.9rem}
+
+  .table-wrap{overflow-x:auto;margin-top:1.3rem}
+  table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:24rem}
+  th,td{text-align:left;padding:.55rem .85rem .55rem 0;border-bottom:1px solid var(--rule)}
+  th{font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;
+     color:var(--muted);font-weight:500}
+  td.num,th.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;padding-right:0}
+  tfoot td{font-weight:600;border-bottom:none;padding-top:.7rem}
+
+  .note{margin-top:2.8rem;border:1px solid var(--rule);border-radius:3px;padding:1rem 1.15rem;
+        background:var(--surface);font-size:.88rem;color:var(--muted);max-width:var(--measure)}
+  .note strong{color:var(--text)}
+  footer.doc{margin-top:2.6rem;padding-top:1rem;border-top:1px solid var(--rule);
+             font-family:var(--mono);font-size:.68rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+  a{color:var(--brass);text-underline-offset:2px}
+  :focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+
+  @media print{
+    :root,:root[data-theme="dark"],:root:not([data-theme="light"]){
+      --brass:#7A6112;--ground:#FFF;--surface:#FBFAF6;--band:#F2EFE7;--text:#0E1116;
+      --muted:#4A4D4A;--rule:#D2CCBC;--rail:#B4AD9B;color-scheme:light}
+    body{padding:0;font-size:10.5pt;background:#FFF;color:#0E1116}
+    .page{max-width:none}
+    section{margin-top:1.7rem}
+    figure{break-inside:avoid-page;margin-top:1.1rem}
+    .service,.gcard,.stage-row,.rules li,.note{break-inside:avoid-page}
+    h2,h3{break-after:avoid-page}
+    a{color:#0E1116;text-decoration:none}
+    .page-break{break-before:page}
+    /* keep the closing note and footer together — the footer was landing
+       alone on a final page */
+    .note{break-after:avoid-page;margin-top:1.8rem}
+    footer.doc{margin-top:1.1rem;break-before:avoid-page}
+  }
+</style>
+
+<div class="page">
+
+<header class="masthead">
+  <p class="kicker">Engineering guide · v1.0 · September 2026</p>
+  <h1>Ticker</h1>
+  <p class="standfirst">
+    A single-machine stock dashboard: live prices streamed to the browser, a portfolio
+    derived from an append-only ledger, and an AI analyst that can propose changes but
+    never make them. This guide covers the architecture end to end, how each layer
+    works, and how the system was built.
+  </p>
+  <div class="meta">
+    <span>Live <b>ticker-dash.fly.dev</b></span>
+    <span>Backend <b>Python 3.12 / FastAPI</b></span>
+    <span>Frontend <b>React 18 / Vite</b></span>
+    <span>Tests <b>291</b></span>
+    <span>Machines <b>1</b></span>
+    <span>Cost <b>~$3/mo</b></span>
+  </div>
+</header>
+
+<section>
+  <p class="eyebrow">Project at a glance</p>
+  <h2>Five layers, one process, three rented services</h2>
+  <div class="col">
+    <p>
+      Everything below the browser runs as a single Python process on a single machine.
+      That is a deliberate constraint, not a limitation of scale: the market feed allows
+      one connection per key, and the database is a file on a disk that cannot be mounted
+      twice.
+    </p>
+  </div>
+
+  <div class="glance">
+    <div class="gcard">
+      <span class="k">Data layer</span>
+      <span class="v">Rented feeds + SQLite</span>
+      <span class="d">Finnhub, Twelve Data, Anthropic. Local state in one SQLite file on a Fly volume.</span>
+    </div>
+    <div class="gcard">
+      <span class="k">Processing layer</span>
+      <span class="v">Providers + services</span>
+      <span class="d">Provider interface, TTL cache, price hub, FIFO lot engine, chat loop.</span>
+    </div>
+    <div class="gcard">
+      <span class="k">Application layer</span>
+      <span class="v">FastAPI</span>
+      <span class="d">14 REST routes, one WebSocket, one SSE stream, all behind a session gate.</span>
+    </div>
+    <div class="gcard">
+      <span class="k">Visualisation layer</span>
+      <span class="v">React + lightweight-charts</span>
+      <span class="d">Zustand for high-frequency prices, TanStack Query for REST.</span>
+    </div>
+    <div class="gcard">
+      <span class="k">Output layer</span>
+      <span class="v">One page, one origin</span>
+      <span class="d">The API serves the built SPA, so there is a single deploy and no CORS.</span>
+    </div>
+    <div class="gcard">
+      <span class="k">Invariant</span>
+      <span class="v">Transactions are truth</span>
+      <span class="d">Positions, cost basis and P/L are all recomputed; nothing is stored twice.</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">Figure 1 · Runtime architecture</p>
+  <h2>How the system is layered, end to end</h2>
+  <div class="col">
+    <p>
+      Five bands, read top to bottom. The gold path is a live price: the only route in
+      the system that is pushed rather than requested, and the only one where a rate
+      mismatch between source and browser has to be absorbed.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 880 742" role="img"
+         aria-label="Layered architecture. Rented sources feed a provider layer, which feeds services including the price hub and FIFO lot engine backed by SQLite, exposed through an authenticated FastAPI layer over WebSocket, REST and SSE, and consumed by a React browser layer.">
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="a1g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--brass)"/>
+        </marker>
+      </defs>
+
+      <rect class="n-lane" x="96" y="40"  width="780" height="84"/>
+      <rect class="n-lane" x="96" y="148" width="780" height="76"/>
+      <rect class="n-lane" x="96" y="248" width="780" height="140"/>
+      <rect class="n-lane" x="96" y="412" width="780" height="76"/>
+      <rect class="n-lane-b" x="96" y="412" width="780" height="76"/>
+      <rect class="n-lane" x="96" y="512" width="780" height="148"/>
+
+      <text class="lane-t" x="84" y="86"  text-anchor="end">SOURCES</text>
+      <text class="lane-t" x="84" y="190" text-anchor="end">PROVIDERS</text>
+      <text class="lane-t" x="84" y="322" text-anchor="end">SERVICES</text>
+      <text class="lane-t" x="84" y="444" text-anchor="end">API</text>
+      <text class="lane-t" x="84" y="462" text-anchor="end">· AUTH</text>
+      <text class="lane-t" x="84" y="590" text-anchor="end">BROWSER</text>
+
+      <!-- 1 · sources -->
+      <rect class="n-ext" x="100" y="56" width="184" height="52" rx="3"/>
+      <text class="n-t" x="112" y="78">Finnhub</text><text class="n-s" x="112" y="95">trade socket</text>
+      <rect class="n-ext" x="296" y="56" width="184" height="52" rx="3"/>
+      <text class="n-t" x="308" y="78">Finnhub</text><text class="n-s" x="308" y="95">REST quotes · search</text>
+      <rect class="n-ext" x="492" y="56" width="184" height="52" rx="3"/>
+      <text class="n-t" x="504" y="78">Twelve Data</text><text class="n-s" x="504" y="95">daily bars</text>
+      <rect class="n-ext" x="688" y="56" width="184" height="52" rx="3"/>
+      <text class="n-t" x="700" y="78">Anthropic</text><text class="n-s" x="700" y="95">Messages API</text>
+
+      <!-- 2 · providers -->
+      <rect class="n-proc" x="100" y="160" width="230" height="52" rx="3"/>
+      <text class="n-t" x="112" y="182">CompositeProvider</text><text class="n-s" x="112" y="199">routes by capability</text>
+      <rect class="n-proc" x="366" y="160" width="230" height="52" rx="3"/>
+      <text class="n-t" x="378" y="182">CachingProvider</text><text class="n-s" x="378" y="199">quotes 5 s · candles 60 s</text>
+
+      <!-- 3 · services -->
+      <rect class="n-proc" x="100" y="260" width="184" height="52" rx="3"/>
+      <text class="n-t" x="112" y="282">PriceHub</text><text class="n-s" x="112" y="299">coalesce 250 ms</text>
+      <rect class="n-proc" x="296" y="260" width="184" height="52" rx="3"/>
+      <text class="n-t" x="308" y="282">Lot engine</text><text class="n-s" x="308" y="299">FIFO · realized P/L</text>
+      <rect class="n-proc" x="492" y="260" width="184" height="52" rx="3"/>
+      <text class="n-t" x="504" y="282">Performance</text><text class="n-s" x="504" y="299">value over time</text>
+      <rect class="n-proc" x="688" y="260" width="184" height="52" rx="3"/>
+      <text class="n-t" x="700" y="282">ChatService</text><text class="n-s" x="700" y="299">tools · propose only</text>
+
+      <path class="n-data" d="M300 340 a12 9 0 0 1 12 -9 h352 a12 9 0 0 1 12 9 v28 a12 9 0 0 1 -12 9 h-352 a12 9 0 0 1 -12 -9 z"/>
+      <path class="edge" d="M300 340 a12 9 0 0 0 12 9 h352 a12 9 0 0 0 12 -9" opacity="1"/>
+      <text class="n-t" x="320" y="358">SQLite (WAL)</text>
+      <text class="n-s" x="320" y="373">/data/ticker.db · Fly volume</text>
+
+      <!-- 4 · api -->
+      <rect class="n-proc" x="100" y="424" width="248" height="52" rx="3"/>
+      <text class="n-t" x="112" y="446">/ws/prices</text><text class="n-s" x="112" y="463">coalesced ticks · 30 s ping</text>
+      <rect class="n-proc" x="366" y="424" width="248" height="52" rx="3"/>
+      <text class="n-t" x="378" y="446">/api/* REST</text><text class="n-s" x="378" y="463">quotes · portfolio · watchlist</text>
+      <rect class="n-proc" x="632" y="424" width="240" height="52" rx="3"/>
+      <text class="n-t" x="644" y="446">/api/chat/stream</text><text class="n-s" x="644" y="463">SSE: text · tools · cards</text>
+
+      <!-- 5 · browser -->
+      <rect class="n-proc" x="100" y="524" width="376" height="52" rx="3"/>
+      <text class="n-t" x="112" y="546">Zustand price store</text><text class="n-s" x="112" y="563">keyed by symbol · one tick re-renders one row</text>
+      <rect class="n-proc" x="496" y="524" width="376" height="52" rx="3"/>
+      <text class="n-t" x="508" y="546">TanStack Query</text><text class="n-s" x="508" y="563">portfolio · candles · watchlist · history</text>
+      <rect class="n-ui" x="100" y="596" width="772" height="52" rx="3"/>
+      <text class="n-t" x="112" y="618">Dashboard</text>
+      <text class="n-s" x="112" y="635">ticker tape · positions · allocation · charts · analyst chat · confirm cards</text>
+
+      <!-- gold path -->
+      <path class="edge-a" d="M192 108 V160" marker-end="url(#a1g)"/>
+      <path class="edge-a" d="M192 212 V260" marker-end="url(#a1g)"/>
+      <path class="edge-a" d="M192 312 V424" marker-end="url(#a1g)"/>
+      <path class="edge-a" d="M192 476 V524" marker-end="url(#a1g)"/>
+      <path class="edge-a" d="M288 576 V596" marker-end="url(#a1g)"/>
+      <circle class="badge" cx="166" cy="134" r="10"/><text class="badge-t" x="166" y="138" text-anchor="middle">1</text>
+      <text class="e-ta" x="206" y="138">trades, hundreds per second</text>
+      <circle class="badge" cx="166" cy="236" r="10"/><text class="badge-t" x="166" y="240" text-anchor="middle">2</text>
+      <text class="e-ta" x="206" y="240">one socket, N symbols</text>
+      <circle class="badge" cx="166" cy="400" r="10"/><text class="badge-t" x="166" y="404" text-anchor="middle">3</text>
+      <text class="e-ta" x="206" y="404">flush ≤ 4× per second per symbol</text>
+      <circle class="badge" cx="166" cy="500" r="10"/><text class="badge-t" x="166" y="504" text-anchor="middle">4</text>
+      <text class="e-ta" x="206" y="504">tick</text>
+      <circle class="badge" cx="262" cy="586" r="10"/><text class="badge-t" x="262" y="590" text-anchor="middle">5</text>
+      <text class="e-ta" x="302" y="590">render</text>
+
+      <!-- request / response -->
+      <path class="edge" d="M388 108 V160" marker-end="url(#a1)"/>
+      <path class="edge" d="M584 108 V136 H481 V160" marker-end="url(#a1)"/>
+      <path class="edge" d="M420 212 V260" marker-end="url(#a1)"/>
+      <path class="edge" d="M542 212 V236 H584 V260" marker-end="url(#a1)"/>
+      <path class="edge" d="M780 108 V260" marker-end="url(#a1)"/>
+      <text class="e-t" x="868" y="188" text-anchor="end">tool loop, ≤ 6 turns</text>
+
+      <path class="edge" d="M388 312 V331" marker-end="url(#a1)"/>
+      <path class="edge" d="M584 312 V331" marker-end="url(#a1)"/>
+      <path class="edge" d="M760 312 V355 H688" marker-end="url(#a1)"/>
+      <text class="e-t" x="396" y="326">read · write</text>
+      <text class="e-t" x="752" y="336" text-anchor="end">reads only</text>
+
+      <path class="edge" d="M440 377 V424" marker-end="url(#a1)"/>
+      <path class="edge" d="M752 312 V424" marker-end="url(#a1)"/>
+      <path class="edge" d="M490 476 V502 H620 V524" marker-end="url(#a1)"/>
+      <path class="edge" d="M752 476 V524" marker-end="url(#a1)"/>
+      <path class="edge" d="M684 576 V596" marker-end="url(#a1)"/>
+
+      <text class="e-t" x="868" y="406" text-anchor="end">session cookie required — /api/health exempt</text>
+
+      <!-- legend -->
+      <rect class="n-ext" x="100" y="696" width="26" height="16" rx="2"/>
+      <text class="legend-t" x="134" y="708">rented service</text>
+      <rect class="n-proc" x="248" y="696" width="26" height="16" rx="2"/>
+      <text class="legend-t" x="282" y="708">our module</text>
+      <rect class="n-ui" x="380" y="696" width="26" height="16" rx="2"/>
+      <text class="legend-t" x="414" y="708">user-facing</text>
+      <line class="edge-a" x1="510" y1="704" x2="546" y2="704"/>
+      <text class="legend-t" x="554" y="708">pushed price path</text>
+      <line class="edge" x1="690" y1="704" x2="726" y2="704"/>
+      <text class="legend-t" x="734" y="708">request / response</text>
+    </svg>
+    <figcaption>
+      <b>The rate mismatch is the design problem.</b> A liquid symbol prints hundreds of
+      trades a second (1); a browser cannot redraw that often. The PriceHub keeps the
+      latest price per symbol and flushes at most every 250 ms (3), so the browser
+      receives a bounded trickle. Anthropic bypasses the provider layer — it is not
+      market data — and its tools read through the same services everything else uses,
+      never writing. SQLite holds <code>transactions</code>, <code>lots</code>,
+      <code>realized_pnl</code>, <code>watchlist</code> and <code>chat_messages</code>.
+    </figcaption>
+  </figure>
+</section>
+
+<section class="page-break">
+  <p class="eyebrow">Figure 2 · Process detail</p>
+  <h2>The three paths a change can take through the system</h2>
+  <div class="col">
+    <p>
+      Everything the dashboard does is one of three flows. They share the same services
+      but differ in what starts them and what they are allowed to touch: only the
+      portfolio path and the final step of the chat path write to the ledger.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 880 470" role="img"
+         aria-label="Three parallel process tracks: a live price from trade print to rendered row, a portfolio change from form submission to rendered table, and a chat turn from question through tool loop and confirmation to a written transaction.">
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="a2g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--brass)"/>
+        </marker>
+      </defs>
+
+      <!-- ===== track A ===== -->
+      <text class="lane-t" x="12" y="48">A · LIVE PRICE</text>
+      <text class="n-s" x="12" y="66">pushed</text>
+      <rect class="n-lane" x="150" y="28" width="722" height="86"/>
+      <rect class="n-proc" x="158" y="40" width="130" height="46" rx="3"/>
+      <text class="n-t" x="168" y="60">Trade print</text>
+      <text class="n-s" x="168" y="105">finnhub.stream</text>
+      <rect class="n-proc" x="304" y="40" width="130" height="46" rx="3"/>
+      <text class="n-t" x="314" y="60">Cache + flag</text>
+      <text class="n-s" x="314" y="105">price_hub.record</text>
+      <rect class="n-proc" x="450" y="40" width="130" height="46" rx="3"/>
+      <text class="n-t" x="460" y="60">Flush 250 ms</text>
+      <text class="n-s" x="460" y="105">price_hub.flush</text>
+      <rect class="n-proc" x="596" y="40" width="130" height="46" rx="3"/>
+      <text class="n-t" x="606" y="60">Push tick</text>
+      <text class="n-s" x="606" y="105">routers/ws</text>
+      <rect class="n-ui" x="742" y="40" width="122" height="46" rx="3"/>
+      <text class="n-t" x="752" y="60">Flip row</text>
+      <text class="n-s" x="752" y="105">TickerTape</text>
+      <path class="edge-a" d="M288 63 H304" marker-end="url(#a2g)"/>
+      <path class="edge-a" d="M434 63 H450" marker-end="url(#a2g)"/>
+      <path class="edge-a" d="M580 63 H596" marker-end="url(#a2g)"/>
+      <path class="edge-a" d="M726 63 H742" marker-end="url(#a2g)"/>
+      <text class="e-t" x="514" y="30" text-anchor="middle">hundreds/s in · ≤ 4/s out</text>
+
+      <!-- ===== track B ===== -->
+      <text class="lane-t" x="12" y="188">B · PORTFOLIO</text>
+      <text class="n-s" x="12" y="206">writes</text>
+      <rect class="n-lane" x="150" y="168" width="722" height="86"/>
+      <rect class="n-ui" x="158" y="180" width="130" height="46" rx="3"/>
+      <text class="n-t" x="168" y="200">Submit</text>
+      <text class="n-s" x="168" y="245">TransactionForm</text>
+      <rect class="n-proc" x="304" y="180" width="130" height="46" rx="3"/>
+      <text class="n-t" x="314" y="200">Validate</text>
+      <text class="n-s" x="314" y="245">record_transaction</text>
+      <rect class="n-proc" x="450" y="180" width="130" height="46" rx="3"/>
+      <text class="n-t" x="460" y="200">Append + lots</text>
+      <text class="n-s" x="460" y="245">FIFO · _replay</text>
+      <rect class="n-proc" x="596" y="180" width="130" height="46" rx="3"/>
+      <text class="n-t" x="606" y="200">Recompute</text>
+      <text class="n-s" x="606" y="245">positions()</text>
+      <rect class="n-ui" x="742" y="180" width="122" height="46" rx="3"/>
+      <text class="n-t" x="752" y="200">Render</text>
+      <text class="n-s" x="752" y="245">PositionsTable</text>
+      <path class="edge" d="M288 203 H304" marker-end="url(#a2)"/>
+      <path class="edge" d="M434 203 H450" marker-end="url(#a2)"/>
+      <path class="edge" d="M580 203 H596" marker-end="url(#a2)"/>
+      <path class="edge" d="M726 203 H742" marker-end="url(#a2)"/>
+      <text class="e-t" x="369" y="170" text-anchor="middle">oversell → 409, nothing written</text>
+
+      <!-- ===== track C ===== -->
+      <text class="lane-t" x="12" y="328">C · CHAT TURN</text>
+      <text class="n-s" x="12" y="346">proposes</text>
+      <rect class="n-lane" x="150" y="308" width="722" height="86"/>
+      <rect class="n-ui" x="158" y="320" width="130" height="46" rx="3"/>
+      <text class="n-t" x="168" y="340">Ask</text>
+      <text class="n-s" x="168" y="385">useChat · SSE</text>
+      <rect class="n-proc" x="304" y="320" width="130" height="46" rx="3"/>
+      <text class="n-t" x="314" y="340">Tool loop</text>
+      <text class="n-s" x="314" y="385">chat.run_turn</text>
+      <rect class="n-proc" x="450" y="320" width="130" height="46" rx="3"/>
+      <text class="n-t" x="460" y="340">Propose</text>
+      <text class="n-s" x="460" y="385">pending.propose</text>
+      <path class="n-dec" d="M661 320 L726 343 L661 366 L596 343 z"/>
+      <text class="n-t" x="661" y="348" text-anchor="middle">Confirm?</text>
+      <text class="n-s" x="661" y="385" text-anchor="middle">user decides</text>
+      <rect class="n-proc" x="742" y="320" width="122" height="46" rx="3"/>
+      <text class="n-t" x="752" y="340">Write</text>
+      <text class="n-s" x="752" y="385">/chat/confirm</text>
+      <path class="edge" d="M288 343 H304" marker-end="url(#a2)"/>
+      <path class="edge" d="M434 343 H450" marker-end="url(#a2)"/>
+      <path class="edge" d="M580 343 H596" marker-end="url(#a2)"/>
+      <path class="edge" d="M726 343 H742" marker-end="url(#a2)"/>
+      <path class="edge-d" d="M661 366 V392 H450 V366" marker-end="url(#a2)"/>
+      <text class="e-t" x="556" y="406" text-anchor="middle">no · expires after 5 min — nothing written</text>
+
+      <!-- note -->
+      <line class="edge-d" x1="150" y1="424" x2="872" y2="424"/>
+      <text class="legend-t" x="150" y="440">Only track B, and the final step of track C, reach the database.</text>
+      <text class="legend-t" x="150" y="456">The model can create a proposal; it cannot execute one.</text>
+    </svg>
+    <figcaption>
+      <b>The tracks differ in what they may touch.</b> Track A never sees the database.
+      Track C's tool dispatcher is handed a read-only <code>PortfolioReader</code>, not a
+      connection — it cannot write, because it holds no object capable of writing. The
+      diamond is the only gate between a model proposal and a recorded trade.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <p class="eyebrow">Stage reference</p>
+  <h2>Every step, with its input, module and output</h2>
+  <div class="col">
+    <p>
+      The same three tracks, written out. Each stage names the module responsible, so a
+      failure anywhere in the dashboard can be traced to one file.
+    </p>
+  </div>
+
+  <div class="stages">
+    <div class="stage-row"><span class="stage-n">A1</span><div class="stage-b">
+      <span class="stage-h">A trade prints on the exchange</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Finnhub trade socket frame</dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Parse; skip malformed rows rather than dropping the feed</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>providers/finnhub.py · stream()</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd><code>Trade</code> objects, hundreds per second</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">A2</span><div class="stage-b">
+      <span class="stage-h">The hub absorbs the rate</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>A <code>Trade</code></dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Overwrite last price for the symbol; mark dirty. Deliberately does not send</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>services/price_hub.py · record()</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>In-memory cache + dirty set</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">A3</span><div class="stage-b">
+      <span class="stage-h">Flush, at most four times a second</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Dirty set, every 250 ms</dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Send the latest price per symbol to each subscriber that asked for it</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>services/price_hub.py · flush()</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>One <code>tick</code> frame per changed symbol</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">A4</span><div class="stage-b">
+      <span class="stage-h">Fan out to browsers, then render</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Tick frames on <code>/ws/prices</code></dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Store keyed by symbol, so one tick re-renders one row</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>routers/ws.py</code> → <code>store/prices.ts</code> → <code>TickerTape.tsx</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>A digit flips on the tape</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">B1</span><div class="stage-b">
+      <span class="stage-h">A buy or sell is submitted</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Form fields, or a confirmed chat proposal</dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Pydantic validation; symbol normalised</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>routers/portfolio.py · POST /api/transactions</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>A validated <code>NewTransaction</code></dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">B2</span><div class="stage-b">
+      <span class="stage-h">Append to the ledger and rebuild lots</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd><code>NewTransaction</code></dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Reject oversell first; then append and consume oldest lots FIFO — one transaction, so a refusal leaves nothing behind</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>services/portfolio.py · record_transaction()</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>Rows in <code>transactions</code>, <code>lots</code>, <code>realized_pnl</code></dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">B3</span><div class="stage-b">
+      <span class="stage-h">Positions are computed, never stored</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Open lots</dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>One grouped query, then priced with live quotes where available</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>services/portfolio.py · positions()</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>Quantity, cost basis, market value, unrealized P/L, allocation</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">B4</span><div class="stage-b">
+      <span class="stage-h">Value over time is reconstructed</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Whole transaction log + daily closes</dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Replay forwards, valuing holdings at each day's close. A symbol with no history is named, never zero-filled</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>services/performance.py</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>Daily value + cost-basis series for the chart</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">C1</span><div class="stage-b">
+      <span class="stage-h">A question is asked</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Message text; rate limited to 20/hour</dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Load history, cap at ~20 turns, open an SSE stream</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>routers/chat.py · POST /api/chat/stream</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>Server-sent events: text deltas, tool activity, citations</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">C2</span><div class="stage-b">
+      <span class="stage-h">The tool loop runs, read-only</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd>Message + tool definitions</dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Up to 6 turns. The dispatcher holds a <code>PortfolioReader</code>, not a connection</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>services/chat.py · run_turn()</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>Quotes, positions, history, web results</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">C3</span><div class="stage-b">
+      <span class="stage-h">A change is proposed, not made</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd><code>propose_add_shares</code> / <code>propose_remove_shares</code></dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Validate symbol and quantity, fill price from the live quote if omitted, park in memory for 5 minutes</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>services/pending.py</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>A confirm card in the chat panel</dd></dl>
+      </div></div></div>
+
+    <div class="stage-row"><span class="stage-n">C4</span><div class="stage-b">
+      <span class="stage-h">The user confirms — the only write path</span>
+      <div class="stage-g">
+        <dl class="kv"><dt>Input</dt><dd><code>{action_id, approved}</code></dd></dl>
+        <dl class="kv"><dt>Process</dt><dd>Single-use: taking the proposal removes it, so a replayed confirm is a 410 and cannot double-book</dd></dl>
+        <dl class="kv"><dt>Module</dt><dd><code>routers/chat.py · POST /api/chat/confirm</code></dd></dl>
+        <dl class="kv"><dt>Output</dt><dd>Re-enters stage B2; the portfolio broadcasts to open tabs</dd></dl>
+      </div></div></div>
+  </div>
+</section>
+
+<section class="page-break">
+  <p class="eyebrow">Figure 3 · Development workflow</p>
+  <h2>How the system was built: a spec-driven loop with four feedback channels</h2>
+  <div class="col">
+    <p>
+      The project was written by an AI agent — Claude Code, running Claude Opus 5 — against
+      a specification authored before any code existed. There is no autonomous task-runner
+      here: each phase was a deliberate, human-initiated cycle. What makes the loop a loop
+      is the four distinct ways a defect got discovered, three of which only fire after
+      the code is already deployed.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 880 726" role="img"
+         aria-label="Development loop. Specification, per-phase prompts and a durable decision record feed a six-stage cycle: read spec, inspect and verify, implement, verify locally, ship through CI to Fly, observe in production. A decision gate returns failures to implementation, and four feedback channels return findings to the next iteration.">
+      <defs>
+        <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="a3g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--brass)"/>
+        </marker>
+      </defs>
+
+      <!-- inputs -->
+      <text class="lane-t" x="196" y="26">AUTHORED BEFORE THE CODE</text>
+      <rect class="n-data" x="196" y="36" width="150" height="46" rx="3"/>
+      <text class="n-t" x="208" y="56">plan.md</text><text class="n-s" x="208" y="72">§1–§14 spec</text>
+      <rect class="n-data" x="362" y="36" width="150" height="46" rx="3"/>
+      <text class="n-t" x="374" y="56">prompts.md</text><text class="n-s" x="374" y="72">per-phase asks</text>
+      <rect class="n-data" x="528" y="36" width="150" height="46" rx="3"/>
+      <text class="n-t" x="540" y="56">CLAUDE.md</text><text class="n-s" x="540" y="72">durable decisions</text>
+
+      <!-- the cycle -->
+      <rect class="n-proc" x="196" y="132" width="440" height="52" rx="3"/>
+      <text class="n-t" x="212" y="154">1 · Read the phase spec</text>
+      <text class="n-s" x="212" y="171">one §10 phase at a time</text>
+
+      <rect class="n-proc" x="196" y="214" width="440" height="52" rx="3"/>
+      <text class="n-t" x="212" y="236">2 · Inspect repo · verify externals</text>
+      <text class="n-s" x="212" y="253">grep the code; check provider docs, not memory</text>
+
+      <rect class="n-proc" x="196" y="296" width="440" height="52" rx="3"/>
+      <text class="n-t" x="212" y="318">3 · Implement</text>
+      <text class="n-s" x="212" y="335">backend + frontend + tests</text>
+
+      <rect class="n-proc" x="196" y="378" width="440" height="52" rx="3"/>
+      <text class="n-t" x="212" y="400">4 · Verify locally</text>
+      <text class="n-s" x="212" y="417">291 pytest · ruff · tsc · docker build</text>
+
+      <path class="n-dec" d="M416 456 L546 494 L416 532 L286 494 z"/>
+      <text class="n-t" x="416" y="500" text-anchor="middle">All green?</text>
+
+      <rect class="n-proc" x="196" y="558" width="440" height="52" rx="3"/>
+      <text class="n-t" x="212" y="580">5 · Ship</text>
+      <text class="n-s" x="212" y="597">commit → push → GitHub Actions → flyctl deploy</text>
+
+      <rect class="n-ui" x="196" y="640" width="440" height="52" rx="3"/>
+      <text class="n-t" x="212" y="662">6 · Observe in production</text>
+      <text class="n-s" x="212" y="679">live feed · real market hours · real browser</text>
+
+      <!-- forward edges -->
+      <path class="edge" d="M271 82 V132" marker-end="url(#a3)"/>
+      <path class="edge" d="M437 82 V132" marker-end="url(#a3)"/>
+      <path class="edge" d="M416 184 V214" marker-end="url(#a3)"/>
+      <path class="edge" d="M416 266 V296" marker-end="url(#a3)"/>
+      <path class="edge" d="M416 348 V378" marker-end="url(#a3)"/>
+      <path class="edge" d="M416 430 V456" marker-end="url(#a3)"/>
+      <path class="edge" d="M416 532 V558" marker-end="url(#a3)"/>
+      <path class="edge" d="M416 610 V640" marker-end="url(#a3)"/>
+      <text class="e-t" x="428" y="548">yes</text>
+
+      <!-- CLAUDE.md: read at stage 2, written back at stage 6 -->
+      <path class="edge-d" d="M603 82 V110 H664 V666 H640" marker-end="url(#a3)" marker-start="url(#a3)"/>
+      <text class="e-t" x="680" y="300">read before each</text>
+      <text class="e-t" x="680" y="316">phase, written back</text>
+      <text class="e-t" x="680" y="332">when a decision</text>
+      <text class="e-t" x="680" y="348">changes</text>
+
+      <!-- fail branch -->
+      <path class="edge" d="M286 494 H150 V322 H196" marker-end="url(#a3)"/>
+      <text class="e-t" x="142" y="412" text-anchor="end">no</text>
+
+      <!-- the loop -->
+      <path class="edge-a" d="M196 666 H80 V158 H196" marker-end="url(#a3g)"/>
+      <text class="e-ta" x="72" y="404" text-anchor="end">next phase</text>
+
+      <!-- feedback channels -->
+      <text class="lane-t" x="872" y="452" text-anchor="end">HOW DEFECTS SURFACED</text>
+      <rect class="n-lane" x="680" y="462" width="192" height="196"/>
+      <rect class="n-lane-b" x="680" y="462" width="192" height="196"/>
+      <circle class="badge" cx="698" cy="492" r="8"/><text class="badge-t" x="698" y="496" text-anchor="middle">1</text>
+      <text class="n-s" x="714" y="489">test suite</text><text class="n-s" x="714" y="504">at stage 4</text>
+      <circle class="badge" cx="698" cy="538" r="8"/><text class="badge-t" x="698" y="542" text-anchor="middle">2</text>
+      <text class="n-s" x="714" y="535">code review</text><text class="n-s" x="714" y="550">a cache leak, +4</text>
+      <circle class="badge" cx="698" cy="584" r="8"/><text class="badge-t" x="698" y="588" text-anchor="middle">3</text>
+      <text class="n-s" x="714" y="581">production</text><text class="n-s" x="714" y="596">market hours only</text>
+      <circle class="badge" cx="698" cy="630" r="8"/><text class="badge-t" x="698" y="634" text-anchor="middle">4</text>
+      <text class="n-s" x="714" y="627">screenshots</text><text class="n-s" x="714" y="642">the real browser</text>
+    </svg>
+    <figcaption>
+      <b>Three of the four channels only fire after deploy.</b> The test suite catches what
+      can be checked in isolation. A review pass found an unbounded cache that every test
+      passed. Production found a status update that was written but never called — invisible
+      until a real market opened. A screenshot found a chart dying on a CSS colour token.
+      Each produced a fix commit, and the git history interleaves them with the phase
+      commits rather than hiding them.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <p class="eyebrow">Dependencies</p>
+  <h2>The four outside services, and what each is for</h2>
+  <div class="services">
+
+    <article class="service">
+      <header><h3>Finnhub — the price feed</h3><span class="tag tag--free">Free tier</span></header>
+      <dl class="qa">
+        <div><dt>Does what</dt><dd>Live prices and symbol search. Holds one permanently open connection to the market and pushes every trade through it.</dd></div>
+        <div><dt>Why this one</dt><dd>The only free service offering genuinely real-time US prices over a push connection. Most free tiers are delayed, or make you poll.</dd></div>
+        <div><dt>The catch</dt><dd>Its free tier stops at live prices. History is a paid feature — discovered only after deploying, when the request came back refused.</dd></div>
+        <div><dt>Without it</dt><dd>No live prices. Cost basis and realized P/L are unaffected; they come from your own ledger.</dd></div>
+      </dl>
+    </article>
+
+    <article class="service">
+      <header><h3>Twelve Data — the history</h3><span class="tag tag--free">Free tier</span></header>
+      <dl class="qa">
+        <div><dt>Does what</dt><dd>Past prices — the daily closes behind both charts. Nothing live.</dd></div>
+        <div><dt>Why it exists</dt><dd>Purely to fill Finnhub's gap. Rather than pay for history, a second provider answers that one question, behind the same interface.</dd></div>
+        <div><dt>Why this one</dt><dd>800 requests a day free. The obvious alternative allows 25 — six clicks on the chart range buttons would exhaust a day.</dd></div>
+        <div><dt>Without it</dt><dd>Both charts return a 502 that names the fix. Everything else is unaffected.</dd></div>
+      </dl>
+    </article>
+
+    <article class="service">
+      <header><h3>Anthropic — the analyst</h3><span class="tag tag--paid">Pay per use</span></header>
+      <dl class="qa">
+        <div><dt>Does what</dt><dd>Powers the chat. It can read holdings, check prices, read transaction history and search the web, then answer in plain language.</dd></div>
+        <div><dt>The important part</dt><dd>It can propose portfolio changes but cannot make them. Nothing is written until you click Confirm.</dd></div>
+        <div><dt>Why that matters</dt><dd>Not distrust of the model. "Sell everything," typed at 2am, should meet a confirmation dialog like any other destructive action.</dd></div>
+        <div><dt>Without it</dt><dd>The chat panel returns 503. The dashboard works normally.</dd></div>
+      </dl>
+    </article>
+
+    <article class="service">
+      <header><h3>Fly.io — where it runs</h3><span class="tag tag--paid">~$3/month</span></header>
+      <dl class="qa">
+        <div><dt>Does what</dt><dd>Runs the container on one always-on machine with a public address and HTTPS. Hosting, not a component.</dd></div>
+        <div><dt>Why this one</dt><dd>It keeps a long-lived connection open. Hosts that sleep between visits would kill the market socket every time you looked away.</dd></div>
+        <div><dt>Also provides</dt><dd>A volume — a disk that survives restarts. The database lives there; without it every deploy would wipe the ledger.</dd></div>
+        <div><dt>Without it</dt><dd>The app runs on a laptop, reachable only by you, only while it is awake.</dd></div>
+      </dl>
+    </article>
+
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">Constraints</p>
+  <h2>Five decisions that shaped everything else</h2>
+  <ul class="rules">
+    <li><div class="head">Exactly one machine — for correctness, not cost</div>
+      <div class="body">Two copies would open two connections to a feed that allows one, and each would keep its own database on a volume that cannot be double-mounted. The config pins it explicitly rather than relying on a default.</div></li>
+    <li><div class="head">The transaction log is the only source of truth</div>
+      <div class="body">Holdings, average cost and P/L are recomputed from the list of buys and sells every time. The log is append-only; a correction is a new row or a delete-and-rebuild. There is deliberately no stored share count, because average cost loses information the moment you sell part of a position.</div></li>
+    <li><div class="head">The model proposes; the person disposes</div>
+      <div class="body">Enforced structurally: the tool dispatcher receives a narrow read-only reader, never a database connection, so it cannot write. A test runs every tool and asserts the ledger is byte-for-byte unchanged.</div></li>
+    <li><div class="head">It reports; it never advises</div>
+      <div class="body">The system prompt forbids recommendations, price targets and predictions. Asked whether to sell, it declines and offers data. Every answer carries a disclaimer.</div></li>
+    <li><div class="head">Degrade honestly, never guess</div>
+      <div class="body">A price that is unavailable renders as an em dash, not a zero. Stale quotes are labelled with their age. A dead provider leaves market value null and names the symbols it could not price, rather than blanking the portfolio.</div></li>
+  </ul>
+</section>
+
+<section>
+  <p class="eyebrow">Operations</p>
+  <h2>What it costs, and what keeps it alive</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>What it provides</th><th class="num">Per month</th></tr></thead>
+      <tbody>
+        <tr><td>Fly.io machine</td><td>Always-on server, public address, HTTPS</td><td class="num">$2–4</td></tr>
+        <tr><td>Fly.io volume</td><td>1&nbsp;GB disk the ledger survives on</td><td class="num">$0.15</td></tr>
+        <tr><td>Finnhub</td><td>Live prices, 60 requests/min</td><td class="num">$0</td></tr>
+        <tr><td>Twelve Data</td><td>Price history, 800 requests/day</td><td class="num">$0</td></tr>
+        <tr><td>Anthropic</td><td>Chat, billed per message</td><td class="num">a few $</td></tr>
+      </tbody>
+      <tfoot><tr><td colspan="2">Typical total</td><td class="num">under $10</td></tr></tfoot>
+    </table>
+  </div>
+  <div class="col" style="margin-top:1.1rem">
+    <p>
+      Migrations run at boot, idempotently — never as a release command, because that
+      machine runs with no volume attached and the work would vanish. A nightly snapshot
+      writes beside the live database using SQLite's online backup, not a file copy: with
+      write-ahead logging, copying the database without its journal yields a torn file
+      that looks fine until you need it.
+    </p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">Status</p>
+  <h2>What is built</h2>
+  <div class="glance">
+    <div class="gcard"><span class="k">Market data</span><span class="v">Live + historical</span>
+      <span class="d">Streaming prices with honest staleness labels; daily bars behind both charts.</span></div>
+    <div class="gcard"><span class="k">Portfolio</span><span class="v">FIFO ledger</span>
+      <span class="d">Positions, cost basis, realized and unrealized P/L, allocation, value over time.</span></div>
+    <div class="gcard"><span class="k">Analyst</span><span class="v">Tools + confirm</span>
+      <span class="d">Reads holdings and the web; proposes changes you approve.</span></div>
+    <div class="gcard"><span class="k">Watchlist</span><span class="v">Editable tape</span>
+      <span class="d">Add or remove tracked symbols; validated against the feed before saving.</span></div>
+    <div class="gcard"><span class="k">Security</span><span class="v">Passphrase + limits</span>
+      <span class="d">HttpOnly session cookie, rate-limited login, socket behind the same gate.</span></div>
+    <div class="gcard"><span class="k">Operations</span><span class="v">CI + backups</span>
+      <span class="d">Deploy on every push, structured JSON logs, nightly database snapshot.</span></div>
+  </div>
+</section>
+
+<p class="note">
+  <strong>Not investment advice.</strong> This system reports data and answers questions
+  about it. Prices may be delayed. Nothing in it is a recommendation to buy or sell
+  anything, and it is built so that it cannot become one.
+</p>
+
+<footer class="doc">Ticker · engineering guide · one machine · three rented services · 291 tests</footer>
+
+</div>
