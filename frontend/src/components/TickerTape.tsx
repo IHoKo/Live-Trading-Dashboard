@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { usePriceSocket, useSymbols } from '../hooks/usePriceSocket'
+import { useWatchlist } from '../hooks/useWatchlist'
 import { freshness, selectTick, usePriceStore } from '../store/prices'
 import { SplitFlapNumber } from './SplitFlap'
+import { WatchlistEditor } from './WatchlistEditor'
 
 /**
  * The always-on strip from §8.1.
@@ -13,15 +15,20 @@ import { SplitFlapNumber } from './SplitFlap'
  * spec and already respects prefers-reduced-motion.
  */
 
-// Phase 3 replaces this with the watchlist table (§5).
+/** Only a fallback now: the tape follows the watchlist table (§5), and these
+    are what it is seeded with. Kept so a failed fetch shows something. */
 export const DEFAULT_WATCHLIST = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA']
 
-export function TickerTape({ symbols = DEFAULT_WATCHLIST }: { symbols?: string[] }) {
+export function TickerTape() {
+  const { data, isLoading } = useWatchlist()
+  const [editing, setEditing] = useState(false)
+  const symbols = data?.symbols ?? (isLoading ? [] : DEFAULT_WATCHLIST)
   useSymbols(symbols)
   const status = usePriceStore((s) => s.status)
   const connection = usePriceStore((s) => s.connection)
 
   return (
+    <>
     <div
       style={{
         display: 'flex',
@@ -65,8 +72,43 @@ export function TickerTape({ symbols = DEFAULT_WATCHLIST }: { symbols?: string[]
         <TapeCell key={symbol} symbol={symbol} />
       ))}
 
+      <button
+        type="button"
+        onClick={() => setEditing((open) => !open)}
+        aria-expanded={editing}
+        title="Choose which symbols the tape follows"
+        style={{
+          alignSelf: 'stretch',
+          padding: '0 var(--space-3)',
+          border: 'none',
+          borderLeft: '1px solid var(--rule)',
+          background: editing ? 'var(--brass)' : 'transparent',
+          color: editing ? 'var(--ink)' : 'var(--muted)',
+          font: 'inherit',
+          fontSize: '0.7rem',
+          letterSpacing: '0.1em',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        EDIT
+      </button>
+
       <RefreshButton symbols={symbols} />
     </div>
+
+      {editing && (
+        <div
+          style={{
+            padding: 'var(--space-3) var(--space-4)',
+            borderBottom: '1px solid var(--rule)',
+            background: 'var(--slate)',
+          }}
+        >
+          <WatchlistEditor onClose={() => setEditing(false)} />
+        </div>
+      )}
+    </>
   )
 }
 

@@ -10,7 +10,8 @@ import { Login } from './components/Login'
 import { PerformanceChart } from './components/PerformanceChart'
 import { PositionsTable } from './components/PositionsTable'
 import { ThemeToggle } from './components/Theme'
-import { DEFAULT_WATCHLIST, TickerTape } from './components/TickerTape'
+import { TickerTape } from './components/TickerTape'
+import { useWatchlist } from './hooks/useWatchlist'
 import { TransactionForm, TransactionHistory } from './components/TransactionForm'
 import { money, percent, usePortfolio } from './hooks/usePortfolio'
 import { PriceSocketProvider } from './hooks/usePriceSocket'
@@ -269,6 +270,14 @@ function StatRow() {
     it follows the largest holding, falling back to the tape's lead symbol. */
 function SymbolChart() {
   const { data } = usePortfolio()
-  const symbol = data?.positions[0]?.symbol ?? DEFAULT_WATCHLIST[0]
+  const { data: watchlist } = useWatchlist()
+  const symbol = data?.positions[0]?.symbol ?? watchlist?.symbols[0]
+  if (!symbol) {
+    return (
+      <p style={{ margin: 0, color: 'var(--muted)', fontSize: '0.85rem' }}>
+        Nothing to chart — add a symbol to the tape or record a position.
+      </p>
+    )
+  }
   return <Chart symbol={symbol} />
 }

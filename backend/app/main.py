@@ -24,7 +24,7 @@ from app.providers.cache import CachingProvider
 from app.providers.composite import CompositeProvider
 from app.providers.finnhub import FinnhubProvider
 from app.providers.twelvedata import TwelveDataProvider
-from app.routers import auth, chat, health, portfolio, quotes, ws
+from app.routers import auth, chat, health, portfolio, quotes, watchlist, ws
 from app.services.auth import SessionManager
 from app.services.backup import backup_loop
 from app.services.pending import PendingActionStore, RateLimiter
@@ -159,6 +159,7 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 api.include_router(quotes.router)
 api.include_router(portfolio.router)
 api.include_router(chat.router)
+api.include_router(watchlist.router)
 app.include_router(api)
 
 # Login is on the app, not `api` — you cannot require a session to create one.

@@ -253,7 +253,11 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
     conn = open_database(db_path)
     applied = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()["n"]
     conn.close()
-    assert applied == 1, "each migration is recorded once, however many boots"
+
+    from app.db.connection import MIGRATIONS_DIR
+
+    on_disk = len(list(MIGRATIONS_DIR.glob("*.sql")))
+    assert applied == on_disk, "each migration is recorded once, however many boots"
 
 
 def test_wal_is_enabled(tmp_path: Path) -> None:
