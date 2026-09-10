@@ -132,3 +132,36 @@ export function percent(value: number | null | undefined): string {
 export function qty(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(4).replace(/0+$/, '')
 }
+
+export type Quote = {
+  symbol: string
+  price: number
+  change: number | null
+  change_pct: number | null
+  prev_close: number | null
+  as_of: number
+  age_seconds: number | null
+}
+
+/**
+ * One symbol's quote, for prefilling the transaction form's price.
+ *
+ * The price socket already carries every watchlist and held symbol, so this is
+ * only the fallback for a symbol being typed for the first time. Kept short-
+ * lived: a prefilled price that is minutes old would be quietly wrong, and the
+ * form labels its freshness either way (§4).
+ */
+export function useQuote(symbol: string) {
+  return useQuery({
+    queryKey: ['quote', symbol],
+    queryFn: async () => {
+      const body = await request<{ quotes: Quote[]; unavailable: string[] }>(
+        `/api/quotes?symbols=${encodeURIComponent(symbol)}`,
+      )
+      return body.quotes[0] ?? null
+    },
+    enabled: symbol.length > 0,
+    staleTime: 30_000,
+    retry: false,
+  })
+}
