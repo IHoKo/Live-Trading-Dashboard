@@ -31,8 +31,18 @@ type Candle = {
   volume: number
 }
 
-export function Chart({ symbol }: { symbol: string }) {
+export function Chart({
+  symbol,
+  symbols,
+  onSymbolChange,
+}: {
+  symbol: string
+  /** Every symbol the picker may offer. Omit for a fixed, single-symbol chart. */
+  symbols?: string[]
+  onSymbolChange?: (symbol: string) => void
+}) {
   const [range, setRange] = useState<Range>('1M')
+  const pickable = symbols && symbols.length > 1 && onSymbolChange
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['candles', symbol, range],
@@ -51,7 +61,31 @@ export function Chart({ symbol }: { symbol: string }) {
   return (
     <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-        <span style={{ fontWeight: 600, letterSpacing: '0.04em' }}>{symbol}</span>
+        {pickable ? (
+          <select
+            value={symbol}
+            onChange={(event) => onSymbolChange(event.target.value)}
+            aria-label="Chart symbol"
+            style={{
+              padding: '0.2rem 0.4rem',
+              border: '1px solid var(--rule)',
+              background: 'var(--slate)',
+              color: 'var(--paper)',
+              font: 'inherit',
+              fontWeight: 600,
+              letterSpacing: '0.04em',
+              cursor: 'pointer',
+            }}
+          >
+            {symbols.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span style={{ fontWeight: 600, letterSpacing: '0.04em' }}>{symbol}</span>
+        )}
         <div role="group" aria-label="Chart range" style={{ display: 'flex', gap: 1 }}>
           {RANGES.map((option) => (
             <button

@@ -104,7 +104,7 @@ Don't start editing files until I pick one.
 
 ---
 
-## Two things to keep doing
+## Three things to keep doing
 
 **Add dependencies with `uv add`, never `pip install`.** If a session reaches
 for pip or writes a requirements.txt, stop it — `uv.lock` drifts out of sync

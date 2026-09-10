@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { Allocation } from './components/Allocation'
 import { Card, Stat } from './components/Card'
@@ -271,7 +271,21 @@ function StatRow() {
 function SymbolChart() {
   const { data } = usePortfolio()
   const { data: watchlist } = useWatchlist()
-  const symbol = data?.positions[0]?.symbol ?? watchlist?.symbols[0]
+  const [picked, setPicked] = useState<string | null>(null)
+
+  // Held symbols first, then anything on the tape that is not already held.
+  // Both lists arrive sorted, so the picker's order is stable across refetches.
+  const choices = useMemo(() => {
+    const held = data?.positions.map((position) => position.symbol) ?? []
+    const watched = watchlist?.symbols ?? []
+    return [...held, ...watched.filter((symbol) => !held.includes(symbol))]
+  }, [data, watchlist])
+
+  // A pick goes stale when its symbol leaves the list — sell out of a position
+  // and it is gone. Fall back to the head of the list rather than charting a
+  // symbol that is no longer there.
+  const symbol = picked && choices.includes(picked) ? picked : choices[0]
+
   if (!symbol) {
     return (
       <p style={{ margin: 0, color: 'var(--muted)', fontSize: '0.85rem' }}>
@@ -279,5 +293,5 @@ function SymbolChart() {
       </p>
     )
   }
-  return <Chart symbol={symbol} />
+  return <Chart symbol={symbol} symbols={choices} onSymbolChange={setPicked} />
 }
