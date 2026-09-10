@@ -534,7 +534,7 @@
     <div class="stage-row"><span class="stage-n">B1</span><div class="stage-b">
       <span class="stage-h">A buy or sell is submitted</span>
       <div class="stage-g">
-        <dl class="kv"><dt>Input</dt><dd>Form fields, or a confirmed chat proposal</dd></dl>
+        <dl class="kv"><dt>Input</dt><dd>Form fields, or a confirmed chat proposal. Both paths prefill price from the live quote and label how fresh it is; the form stamps execution time at submit</dd></dl>
         <dl class="kv"><dt>Process</dt><dd>Pydantic validation; symbol normalised</dd></dl>
         <dl class="kv"><dt>Module</dt><dd><code>routers/portfolio.py · POST /api/transactions</code></dd></dl>
         <dl class="kv"><dt>Output</dt><dd>A validated <code>NewTransaction</code></dd></dl>
@@ -814,7 +814,7 @@
   <h2>What is built</h2>
   <div class="glance">
     <div class="gcard"><span class="k">Market data</span><span class="v">Live + historical</span>
-      <span class="d">Streaming prices with honest staleness labels; daily bars behind both charts.</span></div>
+      <span class="d">Streaming prices with honest staleness labels; daily bars behind both charts, over any held or watched symbol.</span></div>
     <div class="gcard"><span class="k">Portfolio</span><span class="v">FIFO ledger</span>
       <span class="d">Positions, cost basis, realized and unrealized P/L, allocation, value over time.</span></div>
     <div class="gcard"><span class="k">Analyst</span><span class="v">Tools + confirm</span>
