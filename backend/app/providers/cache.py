@@ -28,6 +28,10 @@ from app.providers.base import (
 # future key-design mistake costs a cache miss instead of the machine.
 DEFAULT_MAX_ENTRIES = 512
 
+# Resolutions whose bars are fixed once the session closes; only the newest
+# bar still moves. These get the longer of the two candle TTLs.
+_SETTLED_RESOLUTIONS = frozenset({"D", "W", "M"})
+
 
 class TTLCache:
     """Single-process TTL cache with per-key locking and a hard size bound.
@@ -148,12 +152,19 @@ class CachingProvider(MarketDataProvider):
         *,
         quote_ttl: float = 5.0,
         candle_ttl: float = 60.0,
+        daily_candle_ttl: float = 900.0,
         not_found_ttl: float = 300.0,
     ) -> None:
         self._inner = inner
         self.name = inner.name
         self._quotes = TTLCache(quote_ttl)
         self._candles = TTLCache(candle_ttl)
+        # Daily-or-coarser bars are settled history plus one bar that is still
+        # forming, so 60s of freshness buys nothing and costs the whole budget:
+        # the candles provider allows 8 requests a minute, and portfolio
+        # history spends one per symbol held. Fifteen minutes keeps a day of
+        # browsing inside the budget while today's bar still moves visibly.
+        self._daily_candles = TTLCache(daily_candle_ttl)
         # Negative cache. A symbol the provider does not know will not start
         # existing in the next few seconds, but without this a single typo'd
         # ticker in the watchlist costs one upstream call on every poll — from
@@ -182,7 +193,8 @@ class CachingProvider(MarketDataProvider):
         # are both "D" bars, so a (symbol, resolution) key would collide and
         # serve six months of data to a one-year chart.
         key = (symbol, resolution, to - frm)
-        return await self._candles.get_or_set(
+        cache = self._daily_candles if resolution in _SETTLED_RESOLUTIONS else self._candles
+        return await cache.get_or_set(
             key, lambda: self._inner.candles(symbol, resolution, frm, to)
         )
 

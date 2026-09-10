@@ -22,13 +22,47 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
-from app.providers.base import MarketDataProvider, ProviderError, SymbolNotFound
+from app.providers.base import (
+    AccessDenied,
+    MarketDataProvider,
+    ProviderError,
+    RateLimited,
+    SymbolNotFound,
+)
 
 logger = logging.getLogger("ticker.performance")
 
 # Points are daily. Intraday portfolio history would need intraday bars for
 # every symbol ever held, which is a different cost profile entirely.
 RESOLUTION = "D"
+
+# The chart cannot need a bar from before the first transaction — nothing was
+# held. So every range fetches that one window and slices it locally, rather
+# than asking upstream again per range.
+#
+# This is a quota fix. Twelve Data's free tier allows 8 requests a minute and
+# `closes_by_day` spends one per symbol, so with five holdings a range switch
+# cost five. Browsing 1M -> 6M -> 1Y blew the budget and the whole chart came
+# back empty. One window per symbol makes range switching free.
+#
+# Both ends are floored to a UTC day so the window's *length* is stable for the
+# whole day, which is what the provider cache keys on.
+_WINDOW_PAD_DAYS = 7
+
+
+def _canonical_window(rows: list[dict], to: int) -> tuple[int, int]:
+    """The widest window this ledger could ever chart, as (frm, to).
+
+    Padded backwards a little so the earliest holding has a close to be valued
+    at even if it was bought on a weekend or a holiday.
+    """
+    first = min(_as_date(row["executed_at"]) for row in rows)
+    start = datetime(first.year, first.month, first.day, tzinfo=UTC)
+    frm = int(start.timestamp()) - _WINDOW_PAD_DAYS * 86400
+    # End of the requested day, so today's bar is included and the length stays
+    # constant until midnight UTC.
+    end_of_day = (to // 86400) * 86400 + 86399
+    return frm, end_of_day
 
 
 @dataclass(frozen=True)
@@ -115,6 +149,13 @@ async def closes_by_day(
         except SymbolNotFound:
             logger.warning("no historical data for %s", symbol)
             continue
+        except (RateLimited, AccessDenied):
+            # Neither is a statement about this symbol. Swallowing them here
+            # reported "no historical data for AAPL, AMZN, ..." when the real
+            # answer was "you asked too fast" or "the key lacks the endpoint" —
+            # every symbol dropping out at once, which is the signature of a
+            # budget problem, not of five delistings. Let the router say so.
+            raise
         except ProviderError as exc:
             logger.warning("historical data unavailable for %s: %s", symbol, exc)
             continue
@@ -135,13 +176,18 @@ async def portfolio_performance(
         return [], []
 
     symbols = symbols_ever_held(rows)
-    closes = await closes_by_day(provider, symbols, frm, to)
+    fetch_frm, fetch_to = _canonical_window(rows, to)
+    closes = await closes_by_day(provider, symbols, fetch_frm, fetch_to)
     unpriced = [s for s in symbols if s not in closes]
+
+    # The requested range is a slice of the fetched window, not a fetch of its
+    # own. `frm` of 0 means ALL and keeps everything.
+    cutoff = datetime.fromtimestamp(frm, UTC).date()
 
     # The trading calendar comes from the data itself: the union of days any
     # symbol actually traded. Deriving it beats assuming weekdays-minus-holidays
     # and then disagreeing with the exchange.
-    days = sorted({day for series in closes.values() for day in series})
+    days = sorted({day for series in closes.values() for day in series if day >= cutoff})
     if not days:
         return [], unpriced
 

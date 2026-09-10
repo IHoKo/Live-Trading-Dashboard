@@ -232,6 +232,25 @@ one-file swap §4's interface was designed for.
 - Verify both providers' terms before relying on them. §4 said free tiers change
   quietly and it was right about Finnhub.
 
+**Portfolio history fetches one window per symbol, not one per range.**
+Twelve Data's free tier allows **8 requests/minute**, and `closes_by_day` spends
+one per symbol ever held. Fetching the requested range meant five holdings cost
+five credits per range switch, so browsing 1M → 6M → 1Y exhausted the budget and
+the chart came back completely empty — reported, wrongly, as "no historical data"
+for every symbol at once.
+
+- `performance.py` fetches **one canonical window** per symbol — first
+  transaction (padded a week) to end of today, both floored to a UTC day so the
+  window *length*, which the cache keys on, is stable all day. Every range is a
+  local slice of that. Browsing all five ranges costs 5 credits, not 25.
+- Daily-or-coarser bars (`D`/`W`/`M`) cache for **15 minutes**, not the intraday
+  60s: they are settled history plus one forming bar. Intraday keeps 60s.
+- `closes_by_day` **re-raises `RateLimited` and `AccessDenied`** instead of
+  swallowing them per symbol. Neither is a statement about a symbol, and the old
+  behaviour turned a quota problem into a false claim that the user's holdings
+  have no history. Every symbol failing at once is the signature of a budget
+  problem; no delisting looks like that. `SymbolNotFound` still drops one symbol.
+
 **Polling cannot literally be "every 15s for the whole watchlist" (§4 rung 2).**
 The free tier allows 60 calls/minute, so N symbols every 15s breaks the limit at
 N > 15. `PriceHub` spaces upstream REST calls to a budget (50/min) and lets a poll

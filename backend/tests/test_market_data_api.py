@@ -6,6 +6,7 @@ from two tabs blows that budget without them.
 """
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -539,3 +540,31 @@ def test_a_complete_result_carries_no_notice(client: TestClient) -> None:
     body = client.get("/api/quotes", params={"symbols": "AAPL,MSFT"}).json()
     assert body["notice"] is None
     assert body["unavailable"] == []
+
+
+async def test_daily_bars_outlive_the_intraday_candle_ttl() -> None:
+    """Daily bars are settled history plus one bar still forming. Expiring them
+    every 60s spent the candles provider's whole 8-per-minute budget on
+    portfolio history, which costs one call per symbol held."""
+    inner = FakeProvider()
+    cached = CachingProvider(inner, candle_ttl=60.0, daily_candle_ttl=900.0)
+
+    await cached.candles("AAPL", "D", 1_000_000, 1_086_400)
+    # Five minutes on: past the intraday TTL, well inside the daily one.
+    cached._daily_candles._clock = lambda: time.monotonic() + 300
+    cached._candles._clock = lambda: time.monotonic() + 300
+    await cached.candles("AAPL", "D", 1_000_000, 1_086_400)
+
+    assert len(inner.candle_calls) == 1, "a daily bar should not refetch after 5 minutes"
+
+
+async def test_intraday_bars_keep_the_short_ttl() -> None:
+    """The other half: a 5-minute chart must not be served 15-minute-old bars."""
+    inner = FakeProvider()
+    cached = CachingProvider(inner, candle_ttl=60.0, daily_candle_ttl=900.0)
+
+    await cached.candles("AAPL", "5", 1_000_000, 1_086_400)
+    cached._candles._clock = lambda: time.monotonic() + 300
+    await cached.candles("AAPL", "5", 1_000_000, 1_086_400)
+
+    assert len(inner.candle_calls) == 2, "intraday bars still expire after 60s"

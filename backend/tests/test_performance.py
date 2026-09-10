@@ -11,7 +11,13 @@ from typing import Any
 import pytest
 
 from app.db.connection import connect, migrate
-from app.providers.base import Candle, ProviderError, SymbolNotFound
+from app.providers.base import (
+    AccessDenied,
+    Candle,
+    ProviderError,
+    RateLimited,
+    SymbolNotFound,
+)
 from app.services import portfolio as engine
 from app.services.performance import holdings_by_day, portfolio_performance
 
@@ -228,3 +234,124 @@ async def test_each_symbol_costs_one_upstream_call(db) -> None:
     provider = CandleProvider({"AAPL": {"2026-01-02": 1}, "MSFT": {"2026-01-02": 1}})
     await portfolio_performance(db, provider, frm=ts("2026-01-01"), to=ts("2026-01-03"))
     assert provider.calls == ["AAPL", "MSFT"]
+
+
+# --- one window per symbol, sliced per range --------------------------------
+
+
+class WindowRecorder(CandleProvider):
+    """Remembers the window each call asked for, not just the symbol."""
+
+    def __init__(self, closes: dict[str, dict[str, float]]) -> None:
+        super().__init__(closes)
+        self.windows: list[tuple[int, int]] = []
+
+    async def candles(self, symbol: str, resolution: str, frm: int, to: int):
+        self.windows.append((frm, to))
+        return await super().candles(symbol, resolution, frm, to)
+
+
+async def test_every_range_fetches_the_same_window(db) -> None:
+    """The quota bug: one call per symbol *per range* meant browsing
+    1M -> 6M -> 1Y cost fifteen of the eight-per-minute budget, and the whole
+    chart came back empty. Every range must now ask for one identical window,
+    so the provider cache serves the second and third for free.
+    """
+    buy(db, "AAPL", 1, 1.0, "2026-01-02T10:00:00Z")
+    closes = {"AAPL": {"2026-06-01": 10.0}}
+
+    windows = []
+    for lookback in (31, 183, 366):
+        provider = WindowRecorder(closes)
+        await portfolio_performance(
+            db, provider, frm=ts("2026-06-02") - lookback * 86400, to=ts("2026-06-02")
+        )
+        windows.append(provider.windows[0])
+
+    assert len(set(windows)) == 1, windows
+    # And the length is what the cache keys on, so it must be stable too.
+    assert len({to - frm for frm, to in windows}) == 1
+
+
+async def test_the_window_starts_at_the_first_transaction_not_the_range(db) -> None:
+    buy(db, "AAPL", 1, 1.0, "2026-03-10T10:00:00Z")
+    provider = WindowRecorder({"AAPL": {"2026-06-01": 10.0}})
+
+    await portfolio_performance(
+        db, provider, frm=ts("2026-05-25"), to=ts("2026-06-02")
+    )
+    frm, _ = provider.windows[0]
+    # Padded a week back so the first holding has a close to be valued at.
+    assert ts("2026-03-03") <= frm <= ts("2026-03-10")
+
+
+async def test_the_requested_range_still_slices_the_series(db) -> None:
+    """Fetching wide must not widen the answer."""
+    buy(db, "AAPL", 10, 1.0, "2026-01-02T10:00:00Z")
+    provider = CandleProvider(
+        {"AAPL": {"2026-01-05": 1.0, "2026-03-05": 2.0, "2026-06-05": 3.0}}
+    )
+
+    series, _ = await portfolio_performance(
+        db, provider, frm=ts("2026-06-01"), to=ts("2026-06-10")
+    )
+    assert [p.date for p in series] == ["2026-06-05"]
+
+
+async def test_all_keeps_every_day(db) -> None:
+    buy(db, "AAPL", 10, 1.0, "2026-01-02T10:00:00Z")
+    provider = CandleProvider({"AAPL": {"2026-01-05": 1.0, "2026-06-05": 3.0}})
+
+    series, _ = await portfolio_performance(db, provider, frm=0, to=ts("2026-06-10"))
+    assert [p.date for p in series] == ["2026-01-05", "2026-06-05"]
+
+
+# --- a budget failure is not a missing symbol -------------------------------
+
+
+class RateLimitedProvider(CandleProvider):
+    async def candles(self, symbol: str, resolution: str, frm: int, to: int):
+        self.calls.append(symbol)
+        raise RateLimited("twelvedata rate limit reached")
+
+
+async def test_a_rate_limit_is_raised_not_reported_as_missing_data(db) -> None:
+    """Swallowing it told the user "no historical data for AAPL, AMZN, ..."
+    when the real answer was "you asked too fast" — and the symptom was every
+    symbol vanishing at once, which no delisting produces.
+    """
+    buy(db, "AAPL", 1, 1.0, "2026-01-01T10:00:00Z")
+    buy(db, "MSFT", 1, 1.0, "2026-01-01T10:00:00Z")
+
+    provider = RateLimitedProvider({})
+    with pytest.raises(RateLimited):
+        await portfolio_performance(db, provider, frm=ts("2026-01-01"), to=ts("2026-01-05"))
+
+    # It gives up on the first refusal rather than spending the rest of the
+    # budget discovering the same thing four more times.
+    assert provider.calls == ["AAPL"]
+
+
+async def test_access_denied_is_raised_too(db) -> None:
+    buy(db, "AAPL", 1, 1.0, "2026-01-01T10:00:00Z")
+
+    class Denied(CandleProvider):
+        async def candles(self, symbol: str, resolution: str, frm: int, to: int):
+            raise AccessDenied("candles are on a paid plan")
+
+    with pytest.raises(AccessDenied):
+        await portfolio_performance(db, Denied({}), frm=ts("2026-01-01"), to=ts("2026-01-05"))
+
+
+async def test_one_unknown_symbol_still_only_drops_itself(db) -> None:
+    """The opposite guard: a genuine per-symbol failure must keep behaving as
+    it did, or the fix above would turn one bad ticker into a blank chart."""
+    buy(db, "AAPL", 10, 1.0, "2026-01-02T10:00:00Z")
+    buy(db, "WAT", 10, 1.0, "2026-01-02T10:00:00Z")
+
+    provider = CandleProvider({"AAPL": {"2026-01-05": 2.0}}, fail={"WAT"})
+    series, unpriced = await portfolio_performance(
+        db, provider, frm=ts("2026-01-01"), to=ts("2026-01-10")
+    )
+    assert unpriced == ["WAT"]
+    assert series[0].value == pytest.approx(20.0)
